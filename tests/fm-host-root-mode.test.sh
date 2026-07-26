@@ -161,14 +161,17 @@ test_brief_variants() {
 }
 
 test_host_local_only_rejected_before_mutation() {
-  local host="$TMP/local-only-host" home="$TMP/local-only-home" project="$TMP/local-only-target" fake_root="$TMP/local-only-root" guard_marker="$TMP/local-only-guard" out status=0
+  local host="$TMP/local-only-host" home="$TMP/local-only-home" project="$TMP/local-only-physical" alias="$TMP/local-only-alias" fake_root="$TMP/local-only-root" guard_marker="$TMP/local-only-guard" out status=0
   make_host "$host"
   fm_git_init_commit "$project"
+  ln -s "$project" "$alias"
   mkdir -p "$home/data" "$home/state" "$home/config" "$fake_root/bin"
-  printf '%s\n' "- $(basename "$project") [local-only] - local target (added 2026-07-26)" > "$home/data/projects.md"
+  printf '%s\n%s\n' \
+    "- $(basename "$alias") [local-only] - local target (added 2026-07-26)" \
+    "- $(basename "$project") [no-mistakes] - physical target (added 2026-07-26)" > "$home/data/projects.md"
 
   out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-brief.sh" local-brief "$(basename "$project")" 2>&1) || status=$?
+    "$ROOT/bin/fm-brief.sh" local-brief "$(basename "$alias")" 2>&1) || status=$?
   expect_code 1 "$status" "host-root brief must reject local-only delivery"
   assert_contains "$out" "host-root mode does not support local-only project" "host-root brief refusal was not explicit"
   assert_absent "$home/data/local-brief" "host-root brief created task data before rejecting local-only delivery"
@@ -184,7 +187,7 @@ SH
   printf '<!-- firstmate-execution-mode: host-root -->\n' > "$home/data/local-spawn/brief.md"
   status=0
   out=$(cd "$host" && FM_GUARD_MUTATION="$guard_marker" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-spawn.sh" local-spawn "$project" codex 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" local-spawn "$alias" codex 2>&1) || status=$?
   expect_code 1 "$status" "host-root spawn must reject local-only delivery"
   assert_contains "$out" "host-root mode does not support local-only project" "host-root spawn refusal was not explicit"
   assert_absent "$guard_marker" "host-root spawn ran the fleet guard before rejecting local-only delivery"
@@ -478,9 +481,9 @@ test_all_harnesses_add_one_task_safeguard() {
 }
 
 test_mutators_require_host_cwd() {
-  local host="$TMP/mutator-host" other="$TMP/mutator-other" home="$TMP/mutator-home" out status=0
+  local host="$TMP/mutator-host" other="$TMP/mutator-other" home="$TMP/mutator-home" fake_root="$TMP/mutator-root" guard_marker="$TMP/mutator-guard" out status=0
   make_host "$host"
-  mkdir -p "$other" "$home/state"
+  mkdir -p "$other" "$home/state" "$fake_root/bin"
   printf 'window=fake:fm-lane\nworktree=/tmp/target\nhost_root=%s\nproject=/tmp/project\nkind=ship\n' "$host" > "$home/state/lane.meta"
   printf 'window=fake:fm-scout\nworktree=/tmp/scout\nhost_root=%s\nproject=/tmp/project\nkind=scout\n' "$host" > "$home/state/scout.meta"
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-send.sh" lane hello 2>&1) || status=$?
@@ -516,10 +519,32 @@ test_mutators_require_host_cwd() {
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
   expect_code 2 "$status" "fm-promote must reject a host cwd mismatch"
   grep -qx 'kind=scout' "$home/state/scout.meta" || fail "promote mutated task metadata before host validation"
+  printf 'mode=local-only\n' >> "$home/state/scout.meta"
+  cat > "$fake_root/bin/fm-guard.sh" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_GUARD_MUTATION"
+SH
+  chmod +x "$fake_root/bin/fm-guard.sh"
+  status=0
+  out=$(cd "$host" && FM_GUARD_MUTATION="$guard_marker" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
+  expect_code 1 "$status" "fm-promote must reject a host-root local-only scout"
+  assert_contains "$out" 'host-root mode does not support promoting local-only scout' "host-root local-only promotion refusal was not explicit"
+  assert_absent "$guard_marker" "host-root promotion ran the fleet guard before rejecting local-only delivery"
+  grep -qx 'kind=scout' "$home/state/scout.meta" || fail "local-only promotion mutated task metadata"
+  sed -i '/^mode=local-only$/d' "$home/state/scout.meta"
   status=0
   out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
   expect_code 0 "$status" "fm-promote rejected a recorded host-root scout"
   assert_contains "$out" "'$ROOT/bin/fm-send.sh'" "host-root promotion did not print a quoted absolute fm-send path"
+  assert_contains "$out" 'git -C "$FM_TARGET_WORKTREE" status' "host-root promotion did not scope scratch status"
+  assert_contains "$out" 'git -C "$FM_TARGET_WORKTREE" log' "host-root promotion did not scope scratch history"
+  assert_contains "$out" 'git -C "$FM_TARGET_WORKTREE" checkout -b fm/scout' "host-root promotion did not scope branch creation"
+  assert_contains "$out" '(cd "$FM_TARGET_WORKTREE" && ...)' "host-root promotion did not scope validation commands"
+  printf 'window=fake:fm-plain\nworktree=/tmp/plain\nproject=/tmp/project\nkind=scout\n' > "$home/state/plain.meta"
+  status=0
+  out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$ROOT/bin/fm-promote.sh" plain 2>&1) || status=$?
+  expect_code 0 "$status" "fm-promote changed default-mode promotion"
+  assert_contains "$out" '<ship instructions: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/plain; implement; report done>' "default-mode promotion instructions changed"
   status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-check-register.sh" lane 2>&1) || status=$?
   expect_code 2 "$status" "fm-check-register must reject a host cwd mismatch"
