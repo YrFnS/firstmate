@@ -899,9 +899,12 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
     "project=$project" \
     "kind=scout"
   child_title=$(zellij_expected_scoped_title fm-childz "$home" "$home")
-  zellij_pane_response "$dir" 1 7 4
-  zellij_tab_response "$dir" 2 4 "$child_title"
-  printf '[]\n' > "$dir/responses/3.out"
+  printf '[]\n' > "$dir/responses/1.out"
+  printf '[]\n' > "$dir/responses/2.out"
+  zellij_pane_response "$dir" 3 7 4
+  zellij_tab_response "$dir" 4 4 "$child_title"
+  printf '[]\n' > "$dir/responses/5.out"
+  printf '[]\n' > "$dir/responses/6.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_ROOT_OVERRIDE="$ROOT" \
