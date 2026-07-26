@@ -117,6 +117,26 @@ Valid cleanup removed only the exact task-bound target and left the control wind
 The metadata-only validation covers tmux, Herdr, Zellij, Orca, and cmux before backend dispatch.
 Claude, Codex, OpenCode, Pi, pi-signed, Grok, and Kimi share that backend cleanup boundary; their harness-specific hook files and token cleanup run only after it, so no harness needs a separate endpoint parser.
 
+### Host-root task routing
+
+The rebased host-root path was live-verified on 2026-07-26 with tmux 3.7b, Treehouse 2.0.0, and Codex CLI 0.145.0 on Linux.
+The command shape was:
+
+```sh
+cd "$host"
+TMUX_TMPDIR="$socket_dir" \
+FM_ROOT_OVERRIDE="$firstmate_root" \
+FM_HOME="$firstmate_home" \
+FM_HOST_ROOT="$host" \
+FM_BACKEND=tmux \
+  "$firstmate_root/bin/fm-spawn.sh" "$task_id" "$target_primary" \
+    --harness codex --scout
+```
+
+The worker observed its physical cwd equal to `FM_HOST_ROOT`, its target Git root equal to the physical `FM_TARGET_WORKTREE`, and the target as a detached linked worktree distinct from the clean primary checkout.
+It loaded the host and target `AGENTS.md` files, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
+The host's native startup lifecycle remained active, so host-owned lifecycle effects were allowed rather than treated as task edits.
+
 ## Herdr
 
 The compatibility floor is protocol 14.

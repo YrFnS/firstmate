@@ -86,6 +86,7 @@ run_guard_lib() {
   (
     cd "$cwd" || exit 111
     unset NO_MISTAKES_GATE FM_GATE_REFUSE_BYPASS
+    # shellcheck disable=SC2030  # The marker is intentionally scoped to this probe subshell.
     case "$marker" in
       set) export NO_MISTAKES_GATE=1 ;;
       empty) export NO_MISTAKES_GATE= ;;
@@ -129,6 +130,25 @@ test_helper_normal_is_noop() {
   expect_code 0 "$rc" "helper: a normal session (neither signal) must not refuse"
   [ -z "$out" ] || fail "helper: normal session printed output: $out"
   pass "fm-gate-refuse-lib: no-op for a normal session (neither signal, set -eu clean)"
+}
+
+test_helper_checks_physical_absolute_root_from_other_cwd() {
+  local root_link="$TMP/gate-root-link" out rc
+  ln -s "$GATE_WT" "$root_link"
+  out=$(
+    (
+      cd "$NORMAL_CWD" || exit 111
+      unset NO_MISTAKES_GATE FM_GATE_REFUSE_BYPASS
+      set -eu
+      # shellcheck source=bin/fm-gate-refuse-lib.sh
+      . "$GATE_LIB"
+      fm_refuse_if_gate_agent "$root_link"
+    ) 2>&1
+  )
+  rc=$?
+  expect_code 3 "$rc" "helper: an explicit gate-root anchor must refuse from a normal cwd"
+  assert_contains "$out" "$PATH_MSG" "helper: explicit physical root check did not identify the gate worktree"
+  pass "fm-gate-refuse-lib: checks the physical absolute FM_ROOT independently of cwd"
 }
 
 # --- fm-spawn ---------------------------------------------------------------
@@ -282,13 +302,21 @@ test_send_refuses_and_admits() {
 # task (HEAD reachable from origin), so a normal teardown genuinely succeeds and a
 # refused one leaves the task untouched (mirrors tests/fm-teardown make_case).
 make_teardown_case() {
-  local name=$1 case_dir fakebin t
+  local name=$1 case_dir fakebin
   case_dir="$TMP/$name"; fakebin="$case_dir/fakebin"
   mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
-  for t in treehouse tmux; do
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/$t"
-    chmod +x "$fakebin/$t"
-  done
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/treehouse"
+  chmod +x "$fakebin/treehouse"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+stopped="${0}.stopped"
+case "${1:-}" in
+  kill-window) : > "$stopped" ;;
+  display-message) [ ! -e "$stopped" ] ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fakebin/tmux"
   cat > "$fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
@@ -365,6 +393,7 @@ test_helper_env_marker_refuses
 test_helper_empty_env_marker_refuses
 test_helper_path_backstop_refuses
 test_helper_normal_is_noop
+test_helper_checks_physical_absolute_root_from_other_cwd
 test_spawn_refuses_and_admits
 test_send_refuses_and_admits
 test_teardown_refuses_and_admits

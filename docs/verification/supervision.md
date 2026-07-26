@@ -60,6 +60,33 @@ The Ahoy first-message boundary was reverified on 2026-07-22 with Pi 0.81.1 and 
 Marked current operational input and the two exact legacy compatibility shapes selected Bearings, while genuine near-miss captain messages remained real boundaries.
 The detailed reconciliation and task chronology stay in the private audit report and PR evidence.
 
+## Host-root task integration
+
+The additive task lifecycle adapters were checked on Linux on 2026-07-19 with Codex 0.144.5, OpenCode 1.17.14, Pi 0.80.10, and Claude Code 2.1.214.
+Codex and OpenCode each loaded the host `AGENTS.md`, emitted one host session-start event, one host completion event, and one task completion event when launched with the state-owned adapter configuration rendered by `bin/fm-spawn.sh`.
+Pi loaded one host extension and one explicit task extension once each for a single-turn probe, and a trusted FirstMate-root run confirmed project extension discovery coexists with an explicit task extension.
+The exact Claude probe was:
+
+```sh
+claude -p --settings "$task_settings" --dangerously-skip-permissions \
+  'Complete one turn and exit.'
+```
+
+The host project `SessionStart` hook fired once, proving `--settings` remains additive to project settings, but organization policy blocked model access before Stop and prevented live task-hook confirmation.
+Grok was unavailable, so its launch-scoped host-root token remains generated and focused-test verified rather than live verified.
+Kimi 0.29.1 launch and global-hook mechanics were live-verified on 2026-07-25, while its launch-scoped host-root token remains focused-test verified rather than live lifecycle verified.
+The reusable deterministic entry points are:
+
+```sh
+tests/fm-host-root-mode.test.sh
+tests/fm-grok-harness.test.sh
+tests/fm-kimi-harness.test.sh
+```
+
+A rebased Codex 0.145.0 scout repeated the integrated path on 2026-07-26 through tmux 3.7b.
+It loaded the host and target instruction surfaces, preserved the separate target worktree, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the host's native startup lifecycle remained active.
+[`runtime-backends.md`](runtime-backends.md#host-root-task-routing) owns the exact spawn command and path-routing evidence.
+
 ## Turn-end guard
 
 The direct and passive mechanisms were validated across all five harnesses on 2026-07-08 through 2026-07-12, with Claude's replacement Stop-owned path revalidated on 2026-07-24.

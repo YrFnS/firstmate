@@ -46,6 +46,8 @@
 # self-governance section when a touched project AGENTS.md lacks it.
 # Refuses to overwrite an existing brief.
 set -eu
+# Paths and names are literal replacement data; never expand '&' as the matched placeholder.
+shopt -u patsub_replacement 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -65,6 +67,8 @@ esac
 . "$SCRIPT_DIR/fm-marker-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-host-root-lib.sh
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 
 resolve_directory_input() {
@@ -116,6 +120,16 @@ if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   exit 1
 fi
 
+HOST_MODE=0
+HOST_ROOT=
+if fm_host_root_enabled; then
+  fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
+  if [ "$KIND" != secondmate ]; then
+    HOST_ROOT=$(fm_host_root_resolve "$FM_ROOT") || exit $?
+    HOST_MODE=1
+  fi
+fi
+
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"
@@ -127,6 +141,43 @@ shell_quote() {
 }
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
+CREW_INTRO='You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.'
+EXECUTION_MARKER=
+EXECUTION_SECTION=
+SETUP_LOCATION="You are in a disposable git worktree of __REPO__, at a detached HEAD on a clean default branch."
+STAY_RULE="Stay inside this worktree; modify nothing outside it."
+SCOUT_STAY_RULE="Stay inside this worktree; the only files you may write outside it are the report and the status file below."
+BRANCH_COMMAND="\`git checkout -b fm/$ID\`"
+PROJECT_MEMORY_TARGET="."
+PROJECT_MEMORY_CONTEXT='in the worktree'
+if [ "$HOST_MODE" -eq 1 ]; then
+  EXECUTION_MARKER='<!-- firstmate-execution-mode: host-root -->'
+  EXECUTION_SECTION=$(cat <<'EOF'
+# Host-root execution contract
+Your top-level process cwd is the physical host instruction root `__HOST_ROOT__`, not the target repository.
+The host root is authoritative for identity, startup, lifecycle, and cross-repository safety; keep it read-only except for effects produced by its own native lifecycle hooks.
+The isolated target worktree is the exact path in `$FM_TARGET_WORKTREE`.
+Before any edit, verify `[ "$(pwd -P)" = "$FM_HOST_ROOT" ]` and verify the physical result of `git -C "$FM_TARGET_WORKTREE" rev-parse --show-toplevel` equals the physical `$FM_TARGET_WORKTREE` path.
+Use `git -C "$FM_TARGET_WORKTREE" worktree list --porcelain` to identify the target primary clone and confirm its physical path differs from `$FM_TARGET_WORKTREE`.
+Read the target worktree root instructions and every applicable nested instruction file before editing; host instructions remain authoritative when the two surfaces conflict, and an unresolved conflict is a needs-decision rather than permission to guess.
+Use absolute paths, `git -C "$FM_TARGET_WORKTREE" ...`, or a scoped subshell for every target operation while keeping the top-level process cwd at the host root.
+Run tests, builds, GitHub tooling, and no-mistakes against `$FM_TARGET_WORKTREE` only; never run a bare target command from the host repository.
+EOF
+)
+  EXECUTION_SECTION=${EXECUTION_SECTION//__HOST_ROOT__/$HOST_ROOT}
+  CREW_INTRO="$CREW_INTRO"$'\n'"$EXECUTION_MARKER"$'\n'"$EXECUTION_SECTION"
+  # shellcheck disable=SC2016  # These variables are literal Markdown instructions for the worker.
+  SETUP_LOCATION='You are launched from the host instruction root; the disposable target git worktree is in `$FM_TARGET_WORKTREE` at a detached HEAD on a clean default branch.'
+  # shellcheck disable=SC2016
+  STAY_RULE='Keep the host root read-only and write target code only under `$FM_TARGET_WORKTREE`; the report and status file named below are the only other task artifacts you may write.'
+  # shellcheck disable=SC2016
+  SCOUT_STAY_RULE='Keep the host root read-only and write target code only under `$FM_TARGET_WORKTREE`; the report and status file below are the only other task artifacts you may write.'
+  # shellcheck disable=SC2016
+  BRANCH_COMMAND='`git -C "$FM_TARGET_WORKTREE" checkout -b fm/'"$ID"'`'
+  # shellcheck disable=SC2016
+  PROJECT_MEMORY_TARGET='"$FM_TARGET_WORKTREE"'
+  PROJECT_MEMORY_CONTEXT='for the target worktree'
+fi
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -214,6 +265,18 @@ exit 0
 fi
 
 REPO=${POS[1]}
+SETUP_LOCATION=${SETUP_LOCATION//__REPO__/$REPO}
+if [ "$HOST_MODE" -eq 1 ]; then
+  # shellcheck disable=SC2016  # Literal Markdown, not shell expansion.
+  ISOLATION_SECTION='**Verify isolation before anything else.** Follow the host-root execution contract above. If the host cwd or target worktree check fails, append `blocked: host-root or isolated target verification failed` and stop before branching or editing.'
+else
+  ISOLATION_SECTION=$(cat <<'EOF'
+**Verify isolation before anything else.** Run `pwd -P` and `git rev-parse --show-toplevel`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
+The path check is authoritative: `git rev-parse --git-dir` and `git rev-parse --git-common-dir` can help inspect the repo, but they do not prove you are outside the primary checkout.
+If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append `blocked: launched in primary checkout, not an isolated worktree` to the status file and stop.
+EOF
+)
+fi
 
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
@@ -249,7 +312,7 @@ fi
 
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+$CREW_INTRO
 
 # Task
 {TASK}
@@ -257,14 +320,14 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 $HERDR_SECTION
 
 # Setup
-You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+$SETUP_LOCATION
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+2. $SCOUT_STAY_RULE
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
@@ -327,10 +390,35 @@ The configured merge authority approves the ready branch, then firstmate merges 
 EOF
     ;;
   *)  # no-mistakes (default)
-    SETUP2="
+    if [ "$HOST_MODE" -eq 1 ]; then
+      SETUP2="
+2. Run \`(cd \"\$FM_TARGET_WORKTREE\" && no-mistakes doctor)\`; if it reports the repo is not initialized there, run \`(cd \"\$FM_TARGET_WORKTREE\" && no-mistakes init)\`."
+    else
+      SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+    fi
     RULE1='1. Never push to the default branch. Never merge a PR.'
-    IFS= read -r -d '' DOD <<EOF || true
+    if [ "$HOST_MODE" -eq 1 ]; then
+      IFS= read -r -d '' DOD <<'EOF' || true
+# Definition of done
+The task is complete only when committed on your branch.
+When you believe it is complete, append `done: {summary}` to the status file and stop.
+Firstmate will then instruct you to invoke /no-mistakes for `$FM_TARGET_WORKTREE` to validate and ship a PR.
+Before invoking it, name that target explicitly and run every no-mistakes CLI command through `(cd "$FM_TARGET_WORKTREE" && no-mistakes ...)`; never let validation default to the host cwd.
+
+You drive no-mistakes by responding to its gates, not by implementing fixes.
+Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and `(cd "$FM_TARGET_WORKTREE" && no-mistakes axi run --help)` plus the `help` lines in each `axi` response are authoritative and version-matched to the installed binary.
+Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
+
+Two firstmate-specific rules layer on top of that guidance:
+- ask-user findings are not yours to answer: escalate to firstmate (rule 6) and stop.
+  When the decision comes back, feed it to the gate through `(cd "$FM_TARGET_WORKTREE" && no-mistakes axi respond ...)` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
+- Avoid `--yes`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
+
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append `done: PR {url} checks green` and stop. You are finished.
+EOF
+    else
+      IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
@@ -348,6 +436,7 @@ Two firstmate-specific rules layer on top of that guidance:
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
+    fi
     ;;
 esac
 
@@ -357,7 +446,7 @@ esac
 DOD=${DOD%$'\n'}
 
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+$CREW_INTRO
 
 # Task
 {TASK}
@@ -365,17 +454,15 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 $HERDR_SECTION
 
 # Setup
-You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+$SETUP_LOCATION
 
-**Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
-The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
-If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+$ISOLATION_SECTION
 
-1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+1. First action: create your branch: $BRANCH_COMMAND$SETUP2
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+2. $STAY_RULE
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
@@ -399,7 +486,7 @@ $RULE1
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
 # Project memory
-If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
+If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh $PROJECT_MEMORY_TARGET\` $PROJECT_MEMORY_CONTEXT.
 Record only project knowledge useful to almost every future session.
 For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
 If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.

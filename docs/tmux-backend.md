@@ -86,6 +86,7 @@ tests/fm-composer-ghost.test.sh
 tests/fm-kimi-harness.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-bootstrap.test.sh
+tests/fm-host-root-mode.test.sh
 ```
 
 [`verification/runtime-backends.md`](verification/runtime-backends.md#tmux) records the active foreground-process and submit evidence.
