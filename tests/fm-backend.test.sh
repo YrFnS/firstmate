@@ -1112,6 +1112,16 @@ test_adapter_target_state_matrices() {
 
 test_stop_and_verify_requires_confirmed_absence() {
   local out status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux ""
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "a missing endpoint id must refuse destructive cleanup"
+  assert_contains "$out" 'missing backend endpoint id' "missing endpoint refusal did not explain the unsafe metadata"
+  assert_not_contains "$out" 'called' "missing endpoint refusal invoked a backend kill"
+
+  status=0
   out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '
     . "$1/bin/fm-backend.sh"
     fm_backend_kill() { return 0; }
