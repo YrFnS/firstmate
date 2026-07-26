@@ -1329,6 +1329,157 @@ test_stop_and_verify_requires_confirmed_absence() {
   pass "fm_backend_stop_and_verify distinguishes confirmed absence from an unreadable backend"
 }
 
+test_adapter_post_create_failure_records_ownership() {
+  local out counter="$TMP_ROOT/cmux-create-counter"
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source herdr
+    fm_backend_herdr_cli() {
+      case "$*" in
+        *"tab list"*) printf "%s" "{\"result\":{\"tabs\":[]}}" ;;
+        *"tab create"*) printf "%s" "{\"result\":{\"tab\":{\"tab_id\":\"tab-7\"}}}" ;;
+      esac
+    }
+    fm_backend_herdr_create_task session:ws fm-task /tmp "" >/dev/null 2>&1
+    rc=$?
+    printf "%s|%s|%s|%s" "$rc" "$FM_BACKEND_CREATE_OCCURRED" "$FM_BACKEND_CREATED_HERDR_TAB_ID" "$FM_BACKEND_CREATED_TARGET"
+  ' _ "$ROOT")
+  [ "$out" = "1|1|tab-7|" ] || fail "herdr did not retain partial post-create ownership: '$out'"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source zellij
+    fm_backend_zellij_session_exists() { return 0; }
+    fm_backend_zellij_cli() {
+      case "$*" in
+        *"list-tabs"*) printf "%s" "[]" ;;
+        *"new-tab"*) printf "7\n" ;;
+        *"list-panes"*) printf "%s" "[]" ;;
+      esac
+    }
+    fm_backend_zellij_create_task firstmate fm-task /tmp >/dev/null 2>&1
+    rc=$?
+    printf "%s|%s|%s|%s" "$rc" "$FM_BACKEND_CREATE_OCCURRED" "$FM_BACKEND_CREATED_ZELLIJ_TAB_ID" "$FM_BACKEND_CREATED_TARGET"
+  ' _ "$ROOT")
+  [ "$out" = "1|1|7|" ] || fail "zellij did not retain partial post-create ownership: '$out'"
+
+  printf '0\n' > "$counter"
+  out=$(FM_CMUX_CREATE_COUNTER="$counter" bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source cmux
+    fm_backend_cmux_cli() {
+      case "$*" in
+        *"workspace list"*)
+          n=$(cat "$FM_CMUX_CREATE_COUNTER"); n=$((n + 1)); printf "%s" "$n" > "$FM_CMUX_CREATE_COUNTER"
+          if [ "$n" -eq 1 ]; then printf "%s" "{\"workspaces\":[]}"; else printf "%s" "{\"workspaces\":[{\"id\":\"ws-7\",\"title\":\"fm-task\"}]}"; fi
+          ;;
+        *"new-workspace"*) return 0 ;;
+        *"list-panes"*) printf "%s" "{\"panes\":[]}" ;;
+      esac
+    }
+    fm_backend_cmux_scoped_title() { printf fm-task; }
+    fm_backend_cmux_create_task fm-task /tmp >/dev/null 2>&1
+    rc=$?
+    printf "%s|%s|%s|%s" "$rc" "$FM_BACKEND_CREATE_OCCURRED" "$FM_BACKEND_CREATED_CMUX_WORKSPACE_ID" "$FM_BACKEND_CREATED_TARGET"
+  ' _ "$ROOT")
+  [ "$out" = "1|1|ws-7|" ] || fail "cmux did not retain partial post-create ownership: '$out'"
+  pass "post-create adapter failures retain partial endpoint ownership for verified spawn rollback"
+}
+
+test_adapter_target_state_matrices() {
+  local out
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    tmux() {
+      case "$CASE:${1:-}" in
+        present:list-panes) printf "%%7|@3|session:fm-task|session:3.0\n"; return 0 ;;
+        absent:list-panes) printf "%%1|@1|session:captain|session:1.0\n"; return 0 ;;
+        unknown:list-panes) printf "transport failure\n" >&2; return 1 ;;
+      esac
+    }
+    for CASE in present absent unknown; do fm_backend_tmux_target_state session:fm-task; printf " "; done
+  ' _ "$ROOT")
+  [ "$out" = "present absent unknown " ] || fail "tmux exact-inventory tri-state matrix drifted: '$out'"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source herdr
+    fm_backend_herdr_cli() {
+      case "$CASE" in
+        present) printf "%s" "{\"result\":{\"pane\":{\"pane_id\":\"w:p\"}}}" ;;
+        absent) printf "%s" "{\"error\":{\"code\":\"pane_not_found\"}}" ;;
+        unknown) printf "%s" "not-json" ;;
+      esac
+    }
+    for CASE in present absent unknown; do fm_backend_herdr_target_state session:w:p; printf " "; done
+  ' _ "$ROOT")
+  [ "$out" = "present absent unknown " ] || fail "herdr tri-state matrix drifted: '$out'"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source zellij
+    zellij() {
+      if [ "$CASE" = absent ]; then printf "No active zellij sessions found\n"; return 1; fi
+      printf "firstmate\n"
+    }
+    fm_backend_zellij_cli() {
+      case "$CASE" in
+        present) printf "%s" "[{\"id\":7,\"is_plugin\":false}]" ;;
+        unknown) printf "%s" "{\"malformed\":true}" ;;
+      esac
+    }
+    for CASE in present absent unknown; do fm_backend_zellij_target_state firstmate:7; printf " "; done
+  ' _ "$ROOT")
+  [ "$out" = "present absent unknown " ] || fail "zellij tri-state matrix drifted: '$out'"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source orca
+    fm_backend_orca_tool_check() { return 0; }
+    orca() {
+      case "$CASE" in
+        present) printf "%s" "{\"ok\":true,\"result\":{}}" ;;
+        absent) printf "%s" "{\"ok\":false,\"error\":{\"code\":\"terminal_handle_stale\"}}" ;;
+        unknown) printf "%s" "not-json" ;;
+      esac
+    }
+    for CASE in present absent unknown; do fm_backend_orca_target_state term-7; printf " "; done
+  ' _ "$ROOT")
+  [ "$out" = "present absent unknown " ] || fail "orca tri-state matrix drifted: '$out'"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source cmux
+    fm_backend_cmux_ping_state() { printf ok; }
+    fm_backend_cmux_cli() {
+      case "$CASE" in
+        present) printf "%s" "{\"workspaces\":[{\"id\":\"ws-7\"}]}" ;;
+        absent) printf "%s" "{\"workspaces\":[]}" ;;
+        unknown) printf "%s" "not-json" ;;
+      esac
+    }
+    for CASE in present absent unknown; do fm_backend_cmux_target_state ws-7:surface-7; printf " "; done
+  ' _ "$ROOT")
+  [ "$out" = "present absent unknown " ] || fail "cmux tri-state matrix drifted: '$out'"
+  pass "all five backend adapters distinguish present, typed absent, and unreadable control planes"
+}
+
+test_stop_and_verify_requires_confirmed_absence() {
+  local out status=0
+  out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_kill() { return 0; }
+    fm_backend_target_state() { printf unknown; }
+    fm_backend_stop_and_verify tmux session:fm-task
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "an unknown post-stop probe must refuse destructive cleanup"
+  assert_contains "$out" 'could not be confirmed absent' "unknown stop verification did not explain the refusal"
+
+  status=0
+  out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_kill() { return 0; }
+    fm_backend_target_state() { printf absent; }
+    fm_backend_stop_and_verify tmux session:fm-task
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 0 "$status" "a confirmed absent endpoint should permit cleanup"
+  [ -z "$out" ] || fail "confirmed absence emitted unexpected output: $out"
+  pass "fm_backend_stop_and_verify distinguishes confirmed absence from an unreadable backend"
+}
+
 # --- backend selection loudly refuses an unknown backend --------------------
 
 test_spawn_refuses_unknown_backend_flag() {
