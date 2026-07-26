@@ -270,6 +270,36 @@ SH
   printf '%s\n' "$fb"
 }
 
+test_host_scout_records_logical_project_mode() {
+  local host="$TMP/scout-mode-host" home="$TMP/scout-mode-home" project="$TMP/scout-mode-physical" alias="$TMP/scout-mode-alias" wt="$TMP/scout-mode-wt" fb log current launch meta out status=0
+  make_host "$host"
+  fm_git_init_commit "$project"
+  ln -s "$project" "$alias"
+  git -C "$project" worktree add -q --detach "$wt"
+  mkdir -p "$home/data" "$home/state" "$home/config"
+  printf '%s\n%s\n' \
+    "- $(basename "$alias") [local-only +yolo] - logical target (added 2026-07-26)" \
+    "- $(basename "$project") [no-mistakes] - physical target (added 2026-07-26)" > "$home/data/projects.md"
+  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-brief.sh" scout-mode "$(basename "$alias")" --scout >/dev/null 2>&1)
+  fb=$(make_fakebin "$TMP/fake-scout-mode")
+  log="$TMP/scout-mode.log"; current="$TMP/scout-mode.current"; launch="$TMP/scout-mode.launch"
+  printf '%s\n' "$alias" > "$current"
+  (cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" scout-mode "$alias" codex --scout >/dev/null 2>&1)
+  meta="$home/state/scout-mode.meta"
+  assert_grep 'kind=scout' "$meta" "host-root scout lost its scout kind"
+  assert_grep 'mode=local-only' "$meta" "host-root scout recorded the physical project's mode"
+  assert_grep 'yolo=on' "$meta" "host-root scout lost the logical project's yolo setting"
+  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-promote.sh" scout-mode 2>&1) || status=$?
+  expect_code 1 "$status" "host-root local-only scout promotion must be rejected"
+  assert_contains "$out" 'host-root mode does not support promoting local-only scout' "host-root local-only scout promotion refusal was not explicit"
+  assert_grep 'kind=scout' "$meta" "rejected promotion changed the scout kind"
+  pass "host-root scouts retain logical project delivery mode through promotion"
+}
+
 test_spawn_separates_roots() {
   local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta before after tree_line cd_line launch_line
   make_host "$host"
@@ -802,6 +832,7 @@ test_session_cwd_mismatch_precedes_mutation
 test_host_command_rendering
 test_brief_variants
 test_host_local_only_rejected_before_mutation
+test_host_scout_records_logical_project_mode
 test_spawn_separates_roots
 test_duplicate_spawn_preserves_existing_task
 test_spawn_rejects_host_as_target_and_cleans_failed_transition
