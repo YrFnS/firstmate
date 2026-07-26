@@ -201,8 +201,7 @@ Spawn rejects a cwd-relative legacy brief in host mode rather than weakening tha
 Host-root ship tasks support `no-mistakes` and `direct-PR` delivery; brief generation, spawn, and scout promotion reject `local-only` because its guarded landing path changes the target project's primary checkout.
 
 Harness integration is additive.
-Claude receives an additional task settings file through `--settings`, Codex retains its launch-command notification, OpenCode receives an explicit task plugin in addition to host project plugins, Pi receives its explicit task extension, and Grok and Kimi use per-process task tokens consumed by their guarded global hooks.
-None of these paths writes or replaces host hook configuration, and each task signal is installed once.
+The [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md#host-root-task-integration) owns each harness's task-signal shape; none writes or replaces host hook configuration, and each signal is installed once.
 The host repository's own lifecycle hooks continue to load from the host cwd.
 Host-root ordinary tasks reject raw launch commands because an unverified command cannot guarantee the required task completion safeguard.
 

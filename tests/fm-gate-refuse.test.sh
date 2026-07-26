@@ -74,6 +74,7 @@ make_normal_repo() {
 
 GATE_WT=$(make_gate_worktree "$TMP/gate")
 NORMAL_CWD=$(make_normal_repo "$TMP/normal-cwd")
+ln -s "$ROOT/bin" "$NORMAL_CWD/bin"
 
 # --- the shared helper, tested directly -------------------------------------
 
@@ -182,7 +183,7 @@ run_spawn() {
   mkdir -p "$home/data/$id"
   printf 'brief\n' > "$home/data/$id/brief.md"
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
-      "FM_ROOT_OVERRIDE=" "FM_HOME=$home" \
+      "FM_ROOT_OVERRIDE=$NORMAL_CWD" "FM_HOME=$home" \
       "FM_STATE_OVERRIDE=$home/state" "FM_DATA_OVERRIDE=$home/data" \
       "FM_PROJECTS_OVERRIDE=$home/projects" "FM_CONFIG_OVERRIDE=$home/config" \
       "FM_SPAWN_NO_GUARD=1" "FM_FAKE_PANE_PATH=$pane" "TMUX=fake,1,0" \
@@ -356,7 +357,7 @@ SH
 run_teardown() {
   local cwd=$1 case_dir=$2; shift 2
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
-      "FM_ROOT_OVERRIDE=$ROOT" "FM_STATE_OVERRIDE=$case_dir/state" \
+      "FM_ROOT_OVERRIDE=$NORMAL_CWD" "FM_STATE_OVERRIDE=$case_dir/state" \
       "FM_CONFIG_OVERRIDE=$case_dir/config" "PATH=$case_dir/fakebin:$PATH" "$@" \
       "$TEARDOWN" task-x1 ) 2>&1
 }
