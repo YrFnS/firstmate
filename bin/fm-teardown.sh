@@ -34,8 +34,8 @@
 # device. It refuses and preserves task state when that proof fails; otherwise
 # it removes the task's check, trust record, PR sidecar, publication record, and
 # quarantine entries with the rest of the volatile state.
-# Every task endpoint is stopped and verified absent before its isolated copy is
-# changed, returned, or removed.
+# Every host-root task endpoint is stopped and verified absent before its
+# isolated copy is changed, returned, or removed.
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
@@ -221,6 +221,8 @@ elif [ "$KIND" = secondmate ]; then
 elif [ "$FORCE" != "--force" ] && fm_pf_relay_active "$FM_HOME"; then
   PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
 fi
+TASK_HOST_MODE=0
+grep -q '^host_root=.' "$META" && TASK_HOST_MODE=1
 
 default_branch() {
   local ref branch
@@ -1508,6 +1510,10 @@ if [ "$KIND" = secondmate ]; then
   preflight_firstmate_home_process_event_tree "$HOME_PATH" "secondmate home" || exit 1
 fi
 
+if [ "$TASK_HOST_MODE" -eq 0 ] && [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
+  cleanup_firstmate_home_children "$HOME_PATH" || exit $?
+fi
+
 if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
   REPORT="$DATA/$ID/report.md"
   if [ ! -f "$REPORT" ]; then
@@ -1618,19 +1624,21 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   validate_worktree_teardown_safety_with_lock_cleanup || exit 1
 fi
 
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ] && [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
-  require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
-  ORCA_PATH_MATCH_VERIFIED=1
-fi
-stop_task_endpoint_and_verify || exit 1
-if [ "$BACKEND" = orca ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
-  validate_worktree_teardown_safety_with_lock_cleanup || exit 1
-fi
-if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
-  cleanup_firstmate_home_children "$HOME_PATH" || exit $?
+if [ "$TASK_HOST_MODE" -eq 1 ]; then
+  if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ] && [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
+    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+    ORCA_PATH_MATCH_VERIFIED=1
+  fi
+  stop_task_endpoint_and_verify || exit 1
+  if [ "$BACKEND" = orca ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+    validate_worktree_teardown_safety_with_lock_cleanup || exit 1
+  fi
+  if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
+    cleanup_firstmate_home_children "$HOME_PATH" || exit $?
+  fi
 fi
 
-# The worker is confirmed stopped before the task branch or isolated copy changes.
+# Host-root tasks reach this point with the worker confirmed stopped.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
@@ -1646,6 +1654,9 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
       "$WT/.opencode/plugins/fm-busy-state.js" \
       "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  if [ "$TASK_HOST_MODE" -eq 0 ] && [ -n "$T" ]; then
+    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fi
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
@@ -1672,8 +1683,32 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   }
 fi
 
-if [ "$BACKEND" = herdr ] \
-   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+if [ "$TASK_HOST_MODE" -eq 0 ]; then
+  if [ "$BACKEND" = herdr ]; then
+    if ! teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
+      echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
+    elif [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
+      fm_backend_herdr_projection_close_pane_focus_preserving \
+        "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" 2>/dev/null || true
+    else
+      fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
+    fi
+  elif [ "$BACKEND" != orca ]; then
+    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  fi
+  if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
+    if fm_backend_herdr_endpoint_confirmed_gone "$T"; then
+      rm -f "$HERDR_PRESENTATION_JOURNAL"
+    else
+      echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
+    fi
+  elif [ "$BACKEND" = herdr ] \
+       && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+    echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
+  fi
+elif [ "$BACKEND" = herdr ] \
+     && [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] \
+     && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
 fi
 # A refused, skipped, or failed Herdr close must never erase a live task's

@@ -1060,6 +1060,7 @@ validate_spawn_worktree() {  # <source> <inspect-target>
 }
 
 arm_created_endpoint_rollback() {
+  [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] || return 0
   [ "${FM_BACKEND_CREATE_OCCURRED:-0}" = 1 ] || return 0
   SPAWN_ENDPOINT_CREATED=1
   case "$BACKEND" in
@@ -1397,7 +1398,7 @@ esac
 # endpoint. Adapter create functions expose partial post-create state so a
 # verification failure cannot leave an unrecorded live endpoint; a duplicate
 # preflight failure leaves FM_BACKEND_CREATE_OCCURRED=0 and owns nothing.
-if [ "$BACKEND" != orca ]; then
+if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   SPAWN_ENDPOINT_CREATED=1
   SPAWN_ABORT_CLEANUP=1
 fi

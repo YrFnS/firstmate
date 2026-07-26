@@ -965,7 +965,7 @@ run_teardown_case() {
 }
 
 test_teardown_conformance_old_vs_new() {
-  local old_bin fb proj wt id old_tmux_ref saved_base_ref
+  local old_bin fb proj wt id old_tmux_ref saved_base_ref kill_line return_line old_kill_line old_return_line
   local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
   # Force the post-squash topology inside this case: merge-base with main may
   # equal HEAD on default-branch CI, and that must not make the legacy kill
@@ -1021,8 +1021,15 @@ test_teardown_conformance_old_vs_new() {
     "legacy teardown fixture did not exercise tmux window cleanup for the task"
   assert_contains "$(cat "$log_new")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"=firstmate:=fm-$id" \
     "teardown did not call tmux kill-window with exact session and window selectors"
+  kill_line=$(grep -n $'^tmux\x1fkill-window\x1f' "$log_new" | head -1 | cut -d: -f1)
+  return_line=$(grep -n $'^treehouse\x1freturn\x1f' "$log_new" | head -1 | cut -d: -f1)
+  old_kill_line=$(grep -n $'^tmux\x1fkill-window\x1f' "$log_old" | head -1 | cut -d: -f1)
+  old_return_line=$(grep -n $'^treehouse\x1freturn\x1f' "$log_old" | head -1 | cut -d: -f1)
+  [ -n "$kill_line" ] && [ -n "$return_line" ] && [ "$return_line" -lt "$kill_line" ] \
+    && [ -n "$old_kill_line" ] && [ -n "$old_return_line" ] && [ "$old_return_line" -lt "$old_kill_line" ] \
+    || fail "unset teardown no longer returns the isolated copy before best-effort endpoint cleanup"
 
-  pass "fm-teardown.sh: treehouse return remains compatible while tmux cleanup uses exact selectors"
+  pass "fm-teardown.sh preserves unset-mode cleanup ordering and exact endpoint selectors"
 }
 
 test_adapter_post_create_failure_records_ownership() {
