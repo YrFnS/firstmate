@@ -180,6 +180,11 @@ if fm_host_root_enabled; then
   fi
 fi
 
+if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ] && [ "$MODE" = local-only ]; then
+  echo "error: host-root mode does not support local-only project ${POS[1]:-target}" >&2
+  exit 1
+fi
+
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"

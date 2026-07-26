@@ -160,6 +160,39 @@ test_brief_variants() {
   pass "brief scaffolding has an explicit host variant and unchanged default variant"
 }
 
+test_host_local_only_rejected_before_mutation() {
+  local host="$TMP/local-only-host" home="$TMP/local-only-home" project="$TMP/local-only-target" fake_root="$TMP/local-only-root" guard_marker="$TMP/local-only-guard" out status=0
+  make_host "$host"
+  fm_git_init_commit "$project"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$fake_root/bin"
+  printf '%s\n' "- $(basename "$project") [local-only] - local target (added 2026-07-26)" > "$home/data/projects.md"
+
+  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-brief.sh" local-brief "$(basename "$project")" 2>&1) || status=$?
+  expect_code 1 "$status" "host-root brief must reject local-only delivery"
+  assert_contains "$out" "host-root mode does not support local-only project" "host-root brief refusal was not explicit"
+  assert_absent "$home/data/local-brief" "host-root brief created task data before rejecting local-only delivery"
+
+  cp "$ROOT/bin/fm-project-mode.sh" "$fake_root/bin/fm-project-mode.sh"
+  cat > "$fake_root/bin/fm-guard.sh" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_GUARD_MUTATION"
+SH
+  chmod +x "$fake_root/bin/fm-project-mode.sh" "$fake_root/bin/fm-guard.sh"
+  : > "$fake_root/AGENTS.md"
+  mkdir -p "$home/data/local-spawn"
+  printf '<!-- firstmate-execution-mode: host-root -->\n' > "$home/data/local-spawn/brief.md"
+  status=0
+  out=$(cd "$host" && FM_GUARD_MUTATION="$guard_marker" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-spawn.sh" local-spawn "$project" codex 2>&1) || status=$?
+  expect_code 1 "$status" "host-root spawn must reject local-only delivery"
+  assert_contains "$out" "host-root mode does not support local-only project" "host-root spawn refusal was not explicit"
+  assert_absent "$guard_marker" "host-root spawn ran the fleet guard before rejecting local-only delivery"
+  assert_absent "$home/state/.spawn-local-spawn.lock" "host-root spawn acquired task state before rejecting local-only delivery"
+  assert_absent "$home/state/local-spawn.meta" "host-root spawn wrote task metadata before rejecting local-only delivery"
+  pass "host-root local-only tasks are rejected before brief or fleet mutation"
+}
+
 make_fakebin() {
   local dir=$1 fb
   fb=$(fm_fakebin "$dir")
@@ -198,7 +231,10 @@ case "${1:-}" in
   list-panes) [ ! -f "$endpoint" ] || printf '%%1|@1|%s|test-session:1.0\n' "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" ;;
   has-session|new-session|set-window-option) ;;
   new-window) : > "$endpoint"; printf '%%1\n' ;;
-  kill-window) [ "${FM_REFUSE_STOP:-0}" = 1 ] || rm -f "$endpoint" ;;
+  kill-window)
+    [ -z "${FM_TMUX_KILL_MUTATION:-}" ] || printf 'late worker edit\n' > "$FM_TMUX_KILL_MUTATION"
+    [ "${FM_REFUSE_STOP:-0}" = 1 ] || rm -f "$endpoint"
+    ;;
   send-keys)
     case "$*" in
       *'treehouse get'*) printf '%s\n' "$FM_TARGET_PATH" > "$FM_CURRENT_PATH" ;;
@@ -651,6 +687,19 @@ test_host_teardown_requires_confirmed_stop() {
 
   : > "$log"; : > "$tree_log"; status=0
   out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_KILL_MUTATION="$wt/late-edit.txt" FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-teardown.sh" host-teardown 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "host-root tmux teardown discarded an edit written during endpoint stop"
+  assert_contains "$out" "uncommitted changes" "post-stop tmux safety refusal did not explain the late edit"
+  assert_present "$wt/late-edit.txt" "post-stop tmux safety refusal lost the late worker edit"
+  assert_present "$home/state/host-teardown.meta" "post-stop tmux safety refusal removed task metadata"
+  assert_no_grep 'return --force' "$tree_log" "post-stop tmux safety refusal returned the worktree"
+  rm -f "$wt/late-edit.txt"
+
+  : > "$log"; : > "$tree_log"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
     FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
@@ -723,6 +772,7 @@ test_resolution_and_validation
 test_session_cwd_mismatch_precedes_mutation
 test_host_command_rendering
 test_brief_variants
+test_host_local_only_rejected_before_mutation
 test_spawn_separates_roots
 test_duplicate_spawn_preserves_existing_task
 test_spawn_rejects_host_as_target_and_cleans_failed_transition
