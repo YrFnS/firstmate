@@ -75,6 +75,10 @@ ID=${POS[0]}
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
 fm_host_root_assert_task_cwd "$FM_ROOT" "$META" || exit $?
+if grep -q '^host_root=.' "$META" && [ "$MODE" = local-only ]; then
+  echo "error: host-root mode does not support promoting local-only scout $ID" >&2
+  exit 1
+fi
 # The recorded host binding is established before this guard can repair state.
 "$FM_ROOT/bin/fm-guard.sh" || true
 grep -qx 'kind=scout' "$META" || { echo "error: task $ID is not a scout task (kind=scout not in meta)" >&2; exit 1; }
@@ -90,9 +94,11 @@ mv "$TMP" "$META"
 
 HOME_Q=$(printf '%q' "$FM_HOME")
 SEND=bin/fm-send.sh
+SHIP_INSTRUCTIONS="review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done"
 if grep -q '^host_root=.' "$META"; then
   FM_ROOT_REAL=$(cd "$FM_ROOT" && pwd -P)
   SEND=$(fm_host_root_shell_quote "$FM_ROOT_REAL/bin/fm-send.sh")
+  SHIP_INSTRUCTIONS='review scratch state with git -C "$FM_TARGET_WORKTREE" status and git -C "$FM_TARGET_WORKTREE" log; reset "$FM_TARGET_WORKTREE" to a clean default-branch base using git -C "$FM_TARGET_WORKTREE"; carry over only intended fix changes under "$FM_TARGET_WORKTREE"; create branch fm/'"$ID"' with git -C "$FM_TARGET_WORKTREE" checkout -b fm/'"$ID"'; implement under "$FM_TARGET_WORKTREE"; run every remaining Git command with git -C "$FM_TARGET_WORKTREE" and every test, build, and validation command through (cd "$FM_TARGET_WORKTREE" && ...); report done'
 fi
 echo "promoted $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)"
-echo "next: FM_HOME=$HOME_Q $SEND fm-$ID '<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+echo "next: FM_HOME=$HOME_Q $SEND fm-$ID '<ship instructions for mode=$MODE: $SHIP_INSTRUCTIONS>'"
