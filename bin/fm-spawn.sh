@@ -254,14 +254,7 @@ if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ]; then
   fi
   for host_project in "${host_projects[@]}"; do
     [ -n "$host_project" ] || continue
-    host_project_path=$host_project
-    case "$host_project_path" in
-      projects/*) host_project_path="$PROJECTS/${host_project_path#projects/}" ;;
-    esac
     host_project_name=$(basename "$host_project")
-    if [ -d "$host_project_path" ]; then
-      host_project_name=$(basename "$(cd "$host_project_path" && pwd -P)")
-    fi
     read -r host_mode host_yolo <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$host_project_name")
 EOF
