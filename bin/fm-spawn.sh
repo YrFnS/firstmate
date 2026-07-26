@@ -557,6 +557,10 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   exit 1
 fi
 SPAWN_TASK_LOCK_HELD=1
+if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
+  echo "error: task metadata already exists for $ID; reconcile or tear down the retained task before spawning" >&2
+  exit 1
+fi
 PROJ=
 ARG3=
 FIRSTMATE_HOME=
