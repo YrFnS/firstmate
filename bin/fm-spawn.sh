@@ -1915,6 +1915,7 @@ validate_spawn_worktree() {  # <source> <inspect-target>
 }
 
 arm_created_endpoint_rollback() {
+  [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] || return 0
   [ "${FM_BACKEND_CREATE_OCCURRED:-0}" = 1 ] || return 0
   SPAWN_ENDPOINT_CREATED=1
   case "$BACKEND" in
@@ -2314,9 +2315,11 @@ fi
 # Arm generic rollback only after this invocation demonstrably created its
 # endpoint. Adapter create functions expose partial post-create state so a
 # verification failure cannot leave an unrecorded live endpoint; a duplicate
-# preflight failure leaves FM_BACKEND_CREATE_OCCURRED=0 and owns nothing. A
-# relaunch reuses its endpoint and must never arm fresh-endpoint rollback.
-if [ "$RELAUNCH" -eq 0 ] && [ "$BACKEND" != orca ]; then
+# preflight failure leaves FM_BACKEND_CREATE_OCCURRED=0 and owns nothing. Scope
+# this added rollback to fresh host-root ordinary tasks; relaunches reuse their
+# endpoint and current non-host lifecycle behavior remains upstream-owned.
+if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] \
+   && [ "$RELAUNCH" -eq 0 ] && [ "$BACKEND" != orca ]; then
   SPAWN_ENDPOINT_CREATED=1
   SPAWN_ABORT_CLEANUP=1
 fi
