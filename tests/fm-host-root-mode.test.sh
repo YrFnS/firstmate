@@ -251,6 +251,7 @@ SH
 #!/usr/bin/env bash
 set -u
 [ -z "${FM_TREEHOUSE_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_TREEHOUSE_LOG"
+[ "${FM_REFUSE_RETURN:-0}" != 1 ] || exit 93
 exit 0
 SH
   chmod +x "$fb/treehouse"
@@ -372,12 +373,24 @@ test_duplicate_spawn_preserves_existing_task() {
     FM_TARGET_PATH=/tmp/unused FM_HOST_PATH="$host" TMUX=fake \
     "$ROOT/bin/fm-spawn.sh" lane "$project" codex 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "duplicate spawn unexpectedly succeeded"
-  assert_contains "$out" 'window test-session:fm-lane already exists' "duplicate spawn refusal was not explicit"
+  assert_contains "$out" 'task metadata already exists for lane' "duplicate spawn refusal was not explicit"
   assert_no_grep 'kill-window' "$log" "duplicate spawn killed the existing task endpoint"
   cmp -s "$TMP/existing.meta" "$home/state/lane.meta" || fail "duplicate spawn changed existing metadata"
   cmp -s "$TMP/existing.status" "$home/state/lane.status" || fail "duplicate spawn changed existing status"
   assert_present "$current.endpoint" "duplicate spawn removed the existing endpoint"
-  pass "duplicate spawn preserves the existing endpoint and task records"
+  rm -f "$current.endpoint"
+  : > "$log"
+  status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH=/tmp/unused FM_HOST_PATH="$host" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" lane "$project" codex 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "retained metadata admitted a same-id spawn after its endpoint disappeared"
+  assert_contains "$out" 'task metadata already exists for lane' "retained metadata refusal was not explicit"
+  [ ! -s "$log" ] || fail "retained metadata retry inspected or created a backend endpoint"
+  cmp -s "$TMP/existing.meta" "$home/state/lane.meta" || fail "retained metadata retry changed the recovery record"
+  cmp -s "$TMP/existing.status" "$home/state/lane.status" || fail "retained metadata retry changed existing status"
+  pass "duplicate spawn preserves live and endpoint-free retained task records"
 }
 
 test_spawn_rejects_host_as_target_and_cleans_failed_transition() {
@@ -511,11 +524,28 @@ test_all_harnesses_add_one_task_safeguard() {
 }
 
 test_mutators_require_host_cwd() {
-  local host="$TMP/mutator-host" other="$TMP/mutator-other" home="$TMP/mutator-home" fake_root="$TMP/mutator-root" guard_marker="$TMP/mutator-guard" out status=0
+  local host="$TMP/mutator-host" other="$TMP/mutator-other" home="$TMP/mutator-home" fake_root="$TMP/mutator-root" guard_marker="$TMP/mutator-guard" fb log current out status=0
   make_host "$host"
   mkdir -p "$other" "$home/state" "$fake_root/bin"
   printf 'window=fake:fm-lane\nworktree=/tmp/target\nhost_root=%s\nproject=/tmp/project\nkind=ship\n' "$host" > "$home/state/lane.meta"
   printf 'window=fake:fm-scout\nworktree=/tmp/scout\nhost_root=%s\nproject=/tmp/project\nkind=scout\n' "$host" > "$home/state/scout.meta"
+  fb=$(make_fakebin "$TMP/fake-mutator-read")
+  log="$TMP/mutator-read.log"
+  current="$TMP/mutator-read.current"
+  : > "$log"
+  printf '%s\n' "$host" > "$current"
+  out=$(cd "$other" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_CURRENT_PATH="$current" "$ROOT/bin/fm-peek.sh" lane 2>&1) || status=$?
+  expect_code 2 "$status" "fm-peek must reject a host cwd mismatch"
+  assert_contains "$out" 'requires the recorded host root cwd' "fm-peek host mismatch was not explicit"
+  [ ! -s "$log" ] || fail "fm-peek inspected the endpoint before host validation"
+  status=0
+  out=$(cd "$other" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_CURRENT_PATH="$current" "$ROOT/bin/fm-crew-state.sh" lane 2>&1) || status=$?
+  expect_code 2 "$status" "fm-crew-state must reject a host cwd mismatch"
+  assert_contains "$out" 'requires the recorded host root cwd' "fm-crew-state host mismatch was not explicit"
+  [ ! -s "$log" ] || fail "fm-crew-state inspected the endpoint before host validation"
+  status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-send.sh" lane hello 2>&1) || status=$?
   expect_code 2 "$status" "fm-send must reject a host cwd mismatch"
   assert_contains "$out" 'requires the recorded host root cwd' "fm-send host mismatch was not explicit"
@@ -621,13 +651,14 @@ test_secondmate_actions_keep_supervisor_host_authority() {
 }
 
 test_spawn_rollback_is_transactional() {
-  local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" uncertain_wt="$TMP/rollback-uncertain-wt" unset_wt="$TMP/rollback-unset-wt" fb log current tree_log out status=0
+  local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" uncertain_wt="$TMP/rollback-uncertain-wt" retained_wt="$TMP/rollback-retained-wt" unset_wt="$TMP/rollback-unset-wt" fb log current tree_log out status=0
   make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
   git -C "$project" worktree add -q --detach "$stuck_wt"
   git -C "$project" worktree add -q --detach "$uncertain_wt"
+  git -C "$project" worktree add -q --detach "$retained_wt"
   git -C "$project" worktree add -q --detach "$unset_wt"
-  for id in rollback-clean rollback-stuck rollback-uncertain; do
+  for id in rollback-clean rollback-stuck rollback-uncertain rollback-retained; do
     (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
       "$ROOT/bin/fm-brief.sh" "$id" target >/dev/null 2>&1)
   done
@@ -672,6 +703,28 @@ test_spawn_rollback_is_transactional() {
   assert_present "/tmp/fm-rollback-uncertain" "ambiguous Enter failure removed its task temp root"
   rm -rf "/tmp/fm-rollback-uncertain"
   rm -f "$home/state/rollback-uncertain.meta" "$home/state/rollback-uncertain.pi-ext.ts" "$current.endpoint"
+
+  : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_RETURN=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_LAUNCH_FILE="$TMP/rollback-retained.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$retained_wt" FM_HOST_PATH="$host" \
+    FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "injected worktree return failure unexpectedly succeeded"
+  assert_present "$home/state/rollback-retained.meta" "worktree return failure lost recovery metadata"
+  assert_absent "$current.endpoint" "worktree return failure left the stopped endpoint alive"
+  cp "$home/state/rollback-retained.meta" "$TMP/rollback-retained.meta"
+  : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-retained-retry.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "same-id retry overwrote retained cleanup metadata"
+  assert_contains "$out" 'task metadata already exists for rollback-retained' "retained cleanup retry refusal was not explicit"
+  [ ! -s "$log" ] || fail "retained cleanup retry inspected or created an endpoint"
+  [ ! -s "$tree_log" ] || fail "retained cleanup retry allocated or returned a worktree"
+  cmp -s "$TMP/rollback-retained.meta" "$home/state/rollback-retained.meta" || fail "retained cleanup retry changed the recovery record"
+  rm -rf "/tmp/fm-rollback-retained"
+  rm -f "$home/state/rollback-retained.meta" "$home/state/rollback-retained.pi-ext.ts"
 
   env -u FM_HOST_ROOT FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     "$ROOT/bin/fm-brief.sh" rollback-unset target >/dev/null 2>&1

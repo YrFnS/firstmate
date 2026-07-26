@@ -12,10 +12,22 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-host-root-lib.sh
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
+
+RAW_TARGET=$1
+TASK_META=$(fm_backend_meta_for_selector "$RAW_TARGET" "$STATE" 2>/dev/null || true)
+if [ -z "$TASK_META" ]; then
+  TASK_META=$(fm_backend_meta_for_window "$RAW_TARGET" "$STATE" 2>/dev/null || true)
+fi
+if [ -n "$TASK_META" ]; then
+  fm_host_root_assert_task_cwd "$FM_ROOT" "$TASK_META" || exit $?
+else
+  fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
+fi
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
-RAW_TARGET=$1
 T=$(fm_backend_resolve_selector "$RAW_TARGET" "$STATE")
 N=${2:-40}
 
