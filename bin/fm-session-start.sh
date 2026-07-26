@@ -85,10 +85,11 @@
 # truly needed.
 #
 # Usage: fm-session-start.sh
-#   Prints the full ordered digest to stdout and always exits 0: this is a
-#   reporting command, not a gate. A lock refusal is reported as a loud
-#   banner inline, never a silent failure or a non-zero exit that would make
-#   an agent skip the rest of the digest.
+#   Prints the full ordered digest to stdout and normally exits 0: this is a
+#   reporting command, not a gate. Explicit host-root mode is the one preflight
+#   exception and exits 2 before mutation when its physical cwd contract fails.
+#   A lock refusal is reported as a loud banner inline, never a silent failure
+#   or a non-zero exit that would make an agent skip the rest of the digest.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,6 +98,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-host-root-lib.sh
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
+# Host mode must be validated before lock acquisition or any bootstrap mutation.
+fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 
 # shellcheck source=bin/fm-backend.sh

@@ -117,6 +117,29 @@ fm_backend_tmux_send_literal() {  # <target> <text>
   tmux send-keys -t "$1" -l "$2"
 }
 
+# Tri-state endpoint probe for destructive cleanup. Enumerate exact handles:
+# `display-message -t` silently falls back to the active window when a named
+# target disappeared, which would report a killed worker as still present.
+# A readable inventory proves presence/absence; control-plane failures stay unknown.
+fm_backend_tmux_target_state() {  # <target> -> present|absent|unknown
+  local target=$1 out status pane_id window_id named indexed
+  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    while IFS='|' read -r pane_id window_id named indexed; do
+      case "$target" in
+        "$pane_id"|"$window_id"|"$named"|"$indexed") printf 'present'; return 0 ;;
+      esac
+    done <<< "$out"
+    printf 'absent'
+  else
+    case "$out" in
+      *'no server running'*|*'no sessions'*) printf 'absent' ;;
+      *) printf 'unknown' ;;
+    esac
+  fi
+}
+
 # fm_backend_tmux_kill: remove the task's window, best-effort. Mirrors
 # fm-teardown.sh's `tmux kill-window -t "$T" 2>/dev/null || true`.
 fm_backend_tmux_kill() {  # <target>

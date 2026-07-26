@@ -83,9 +83,15 @@ exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
-# tmux kill-window etc.: succeed silently.
-exit 0
+state="${0%/*}/tmux-live"
+case "${1:-}" in
+  display-message) [ -f "$state" ] ;;
+  list-panes) [ ! -f "$state" ] || printf '%%1|@1|firstmate:fm-task-x1|firstmate:1.0\n' ;;
+  kill-window) [ "${FM_FAKE_TMUX_STOP_FAIL:-0}" = 1 ] || rm -f "$state" ;;
+  *) exit 0 ;;
+esac
 SH
+  : > "$fakebin/tmux-live"
   # Default gh-axi mock: no PR is associated with the branch, and viewing any PR
   # number fails. This keeps the landed-work check hermetic (never reaching the real
   # gh-axi) and represents the common "no GitHub PR" baseline. Tests that need a
@@ -155,7 +161,7 @@ SH
 write_meta() {
   local case_dir=$1 mode=$2 kind=$3
   fm_write_meta "$case_dir/state/task-x1.meta" \
-    "window=fm-task-x1" \
+    "window=firstmate:fm-task-x1" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
     "kind=$kind" \
@@ -512,6 +518,23 @@ test_local_only_fork_remote_allows() {
   expect_code 0 "$rc" "fork-allow: teardown should succeed when HEAD is on a fork remote"
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-allow: teardown printed a REFUSED line"
   pass "local-only worktree with HEAD on a fork remote is torn down (fix holds)"
+}
+
+test_teardown_removes_host_root_adapter_state() {
+  local case_dir artifact
+  case_dir=$(make_case host-adapter-state-cleanup)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "host-root adapter cleanup"
+  add_fork_with_pushed_branch "$case_dir"
+  : > "$case_dir/state/task-x1.claude-settings.json"
+  : > "$case_dir/state/task-x1.opencode-turn-end.js"
+
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "host-adapter-state-cleanup: teardown failed"
+  for artifact in task-x1.claude-settings.json task-x1.opencode-turn-end.js; do
+    assert_absent "$case_dir/state/$artifact" "teardown left host-root adapter state $artifact"
+  done
+  pass "teardown removes state-owned Claude and OpenCode host-root adapters"
 }
 
 test_teardown_prompts_tasks_axi_done_when_compatible() {
@@ -1242,6 +1265,29 @@ test_local_only_force_overrides_unpushed() {
   pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
 }
 
+test_unconfirmed_stop_preserves_worktree() {
+  local case_dir rc tree_log
+  case_dir=$(make_case stop-unconfirmed)
+  write_meta "$case_dir" local-only ship
+  tree_log="$case_dir/treehouse.log"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_TREEHOUSE_LOG"
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+  set +e
+  FM_FAKE_TMUX_STOP_FAIL=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TREEHOUSE_LOG="$tree_log" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "stop-unconfirmed: teardown must fail when endpoint termination cannot be confirmed"
+  assert_grep 'still exists after stop' "$case_dir/stderr" "stop-unconfirmed: refusal did not explain the live endpoint"
+  assert_present "$case_dir/state/task-x1.meta" "stop-unconfirmed: teardown removed recoverable metadata"
+  assert_present "$case_dir/wt" "stop-unconfirmed: teardown recycled the isolated copy"
+  [ ! -s "$tree_log" ] || fail "stop-unconfirmed: teardown invoked treehouse before confirming termination"
+  pass "teardown preserves the isolated copy and task record when worker termination is unconfirmed"
+}
+
 test_herdr_teardown_clears_escalation_marker() {
   local case_dir marker
   case_dir=$(make_case herdr-marker-cleanup)
@@ -1251,14 +1297,28 @@ test_herdr_teardown_clears_escalation_marker() {
   printf '%s\n' 'backend=herdr' >> "$case_dir/state/task-x1.meta"
   cat > "$case_dir/fakebin/herdr" <<'SH'
 #!/usr/bin/env bash
-exit 0
+state="${0%/*}/herdr-live"
+case " $* " in
+  *' status --json '*) printf '%s\n' '{"server":{"running":true}}' ;;
+  *' pane close '*) rm -f "$state" ;;
+  *' pane get '*)
+    if [ -f "$state" ]; then
+      printf '%s\n' '{"result":{"pane":{"pane_id":"pQ"}}}'
+    else
+      printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
+      exit 1
+    fi
+    ;;
+  *) exit 0 ;;
+esac
 SH
+  : > "$case_dir/fakebin/herdr-live"
   chmod +x "$case_dir/fakebin/herdr"
   marker="$case_dir/state/.herdr-escalated-default_wG_pQ"
   : > "$marker"
 
   run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-marker-cleanup: forced teardown failed"
+    || fail "herdr-marker-cleanup: forced teardown failed: $(cat "$case_dir/stderr")"
   [ ! -e "$marker" ] || fail "herdr-marker-cleanup: teardown left the pane's escalation marker behind"
   pass "herdr teardown removes pane-owned escalation dedupe state"
 }
@@ -1353,7 +1413,7 @@ test_herdr_projection_teardown_retires_journal_only_after_confirmed_close() {
 }
 
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
-  local case_dir log closed restored
+  local case_dir log closed restored status=0
   case_dir=$(make_case herdr-projection-unconfirmed-close)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
@@ -1361,17 +1421,23 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
 
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-projection-unconfirmed-close: teardown should preserve best-effort endpoint semantics"
+    || status=$?
+  [ "$status" -ne 0 ] || fail "herdr-projection-unconfirmed-close: teardown accepted an unconfirmed endpoint stop"
   [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
     || fail "unconfirmed task-pane close incorrectly retired the presentation journal"
-  assert_grep "close could not be confirmed" "$case_dir/stderr" \
-    "unconfirmed projected close did not explain why the journal was retained"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "unconfirmed projected close removed the recovery metadata"
+  assert_present "$case_dir/wt" \
+    "unconfirmed projected close removed the isolated worktree"
+  assert_grep "could not be confirmed absent" "$case_dir/stderr" \
+    "unconfirmed projected close did not explain the destructive-cleanup refusal"
   assert_not_contains "$(cat "$log")" "workspace close" \
     "unconfirmed projected close must not escalate to workspace cleanup"
-  pass "herdr projection teardown retains the stale journal and attempts no workspace cleanup when exact-pane close is unconfirmed"
+  pass "herdr projection teardown retains task state and refuses destructive cleanup when exact-pane close is unconfirmed"
 }
 
 test_local_only_fork_remote_allows
+test_teardown_removes_host_root_adapter_state
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses
@@ -1379,6 +1445,7 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_unconfirmed_stop_preserves_worktree
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed

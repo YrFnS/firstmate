@@ -2,7 +2,9 @@
 
 AGENTS.md section 3 is the authoritative behavioral contract for session start.
 The tracked native adapters inject one instruction and never run the digest, acquire the lock, perform bootstrap work, drain notifications, or arm supervision themselves.
-The payload starts with U+2063 and the stable `FIRSTMATE_OP: ` label, carries the current `session-start` protocol kind, and retains exactly ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.`` as its body.
+The payload starts with U+2063 and the stable `FIRSTMATE_OP: ` label and carries the current `session-start` protocol kind.
+Its body is exactly ``Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.`` in default mode.
+In host-root mode the body uses the absolute `FM_ROOT/bin/fm-session-start.sh` path because the authoritative cwd deliberately has no FirstMate-relative `bin/`.
 The Ahoy skill owns the rule that this marked operational input is never a captain-authored session boundary, including its narrow legacy compatibility cases.
 
 ## Shared wrapper and safety
@@ -12,6 +14,7 @@ It sources `bin/fm-gate-refuse-lib.sh` and stays silent for a no-mistakes gate a
 It shares `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so the hooks use one primary-detection owner.
 The Shared Predicate section of [`turnend-guard.md`](turnend-guard.md#shared-predicate) owns marker validation, plain-checkout detection, and required Firstmate-shaped paths.
 
+When `FM_HOST_ROOT` is set, the wrapper also verifies the hook process is running from that physical host root and stays silent on mismatch.
 Before printing, the wrapper reads `state/.lock` and walks at most eight parents from its own pid, matching `bin/fm-lock.sh` and Pi's `lockOwnership()` ancestry depth.
 If the lock names a live pid in that ancestry, session start already ran in this harness session and the wrapper stays silent.
 Every path exits 0, including malformed state and adapter errors, because a Claude SessionStart exit 2 blocks session initialization.

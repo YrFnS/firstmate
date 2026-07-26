@@ -23,6 +23,9 @@ next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
   for a in "$@"; do printf '\x1f%s' "$a"; done
   printf '\n'
 } >> "$LOG"
+if [ "${1:-}" = terminal ] && [ "${2:-}" = close ] && [ -n "${FM_ORCA_CLOSE_MUTATION:-}" ]; then
+  printf 'late worker edit\n' > "$FM_ORCA_CLOSE_MUTATION"
+fi
 if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ]; then
   printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
   exit 0
@@ -65,12 +68,17 @@ add_tmux_fake() {
 #!/usr/bin/env bash
 set -u
 LOG="${FM_ORCA_LOG:?}"
+stopped="${0}.stopped"
 {
   printf 'tmux'
   for a in "$@"; do printf '\x1f%s' "$a"; done
   printf '\n'
 } >> "$LOG"
-exit 0
+case "${1:-}" in
+  kill-window) : > "$stopped" ;;
+  display-message) [ ! -e "$stopped" ] ;;
+  *) exit 0 ;;
+esac
 SH
   chmod +x "$fb/tmux"
 }
@@ -130,7 +138,54 @@ test_runtime_check_refuses_unready_orca_status() {
   status=$?
   [ "$status" -ne 0 ] || fail "runtime_check should fail when Orca runtime is not ready"
   assert_contains "$out" "requires a ready Orca runtime" "runtime_check should explain the readiness requirement"
-  pass "fm_backend_orca_runtime_check: fails closed when runtime is not ready"
+  pass "fm_backend_orca_runtime_check: fails closed when Orca runtime is not ready"
+}
+
+test_current_path_probe_sends_once_and_bounds_reads() {
+  local out counts
+  out=$(FM_ORCA_CWD_PROBE_ATTEMPTS=3 FM_ORCA_CWD_PROBE_DELAY=0 bash -c '
+    . "$1/bin/backends/orca.sh"
+    count_file=$2
+    printf "0\n" > "$count_file"
+    sends=0
+    fm_backend_orca_send_text_line() {
+      sends=$((sends + 1))
+      markers=$(printf "%s\n" "$2" | grep -o "__FM_ORCA_CWD_[A-Z]*_[A-Za-z0-9_]*__")
+      begin=$(printf "%s\n" "$markers" | head -1)
+      end=$(printf "%s\n" "$markers" | tail -1)
+    }
+    fm_backend_orca_read_text_paged() {
+      reads=$(( $(cat "$count_file") + 1 ))
+      printf "%s\n" "$reads" > "$count_file"
+      [ "$reads" -lt 2 ] || printf "%s\n" "$begin" "/tmp/orca root with spaces" "$end"
+    }
+    probe_out=$(mktemp)
+    fm_backend_orca_current_path terminal-1 > "$probe_out"
+    printf "%s\n%s:%s\n" "$(cat "$probe_out")" "$sends" "$(cat "$count_file")"
+    rm -f "$probe_out"
+  ' _ "$ROOT" "$TMP_ROOT/current-path-count")
+  counts=$(printf '%s\n' "$out" | tail -1)
+  [ "$(printf '%s\n' "$out" | head -1)" = '/tmp/orca root with spaces' ] \
+    || fail "current_path did not return the single physical path line"
+  [ "$counts" = '1:2' ] || fail "current_path should send once and stop after the matching read, got $counts"
+
+  out=$(FM_ORCA_CWD_PROBE_ATTEMPTS=3 FM_ORCA_CWD_PROBE_DELAY=0 bash -c '
+    . "$1/bin/backends/orca.sh"
+    count_file=$2
+    printf "0\n" > "$count_file"
+    sends=0
+    fm_backend_orca_send_text_line() { sends=$((sends + 1)); }
+    fm_backend_orca_read_text_paged() {
+      reads=$(( $(cat "$count_file") + 1 ))
+      printf "%s\n" "$reads" > "$count_file"
+    }
+    probe_out=$(mktemp)
+    fm_backend_orca_current_path terminal-2 > "$probe_out"
+    printf "%s:%s:%s\n" "$(cat "$probe_out")" "$sends" "$(cat "$count_file")"
+    rm -f "$probe_out"
+  ' _ "$ROOT" "$TMP_ROOT/current-path-empty-count")
+  [ "$out" = ':1:3' ] || fail "current_path probe was not bounded to one send and three reads, got $out"
+  pass "fm_backend_orca_current_path: one command, unique markers, bounded reads"
 }
 
 test_send_text_submit_verifies_empty_composer_after_enter() {
@@ -415,7 +470,7 @@ test_worktree_and_terminal_helpers_parse_json() {
   pass "Orca lifecycle helpers: register repo, create worktree, create terminal, parse stable ids"
 }
 
-test_worktree_create_removes_worktree_when_path_missing() {
+test_worktree_create_defers_pathless_cleanup_to_verified_rollback() {
   local out status
   orca_case lifecycle-missing-path
   printf '1\n' > "$RESP/1.exit"
@@ -427,11 +482,48 @@ test_worktree_create_removes_worktree_when_path_missing() {
   [ "$status" -ne 0 ] || fail "worktree helper should fail when Orca omits the worktree path"
   assert_contains "$out" "orca worktree create did not return a path for fm-task" \
     "worktree helper did not explain the missing path"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''close'$'\x1f''--terminal'$'\x1f''term-no-path'$'\x1f''--json' \
-    "worktree helper did not close the implicit terminal when path parsing failed"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm'$'\x1f''--worktree'$'\x1f''id:wt-no-path'$'\x1f''--force'$'\x1f''--json' \
-    "worktree helper did not remove the pathless Orca worktree"
-  pass "fm_backend_orca_worktree_create: removes created worktree when path is missing"
+  assert_contains "$out" $'wt-no-path\t\tterm-no-path' \
+    "worktree helper did not return recoverable worktree/terminal ids"
+  assert_no_grep $'orca\x1fterminal\x1fclose' "$LOG" \
+    "pathless helper bypassed verified rollback by closing the terminal itself"
+  assert_no_grep $'orca\x1fworktree\x1frm' "$LOG" \
+    "pathless helper removed a worktree before terminal absence was confirmed"
+  pass "fm_backend_orca_worktree_create: defers pathless cleanup to verified rollback"
+}
+
+test_spawn_preserves_pathless_orca_worktree_when_terminal_stop_is_unknown() {
+  local proj data state config id out status log_text
+  id="orcapathless-termz7"
+  proj="$TMP_ROOT/pathless-terminal-project"
+  data="$TMP_ROOT/pathless-terminal-data"
+  state="$TMP_ROOT/pathless-terminal-state"
+  config="$TMP_ROOT/pathless-terminal-config"
+  fm_git_init_commit "$proj"
+  mkdir -p "$data/$id" "$state" "$config"
+  printf 'brief\n' > "$data/$id/brief.md"
+  touch "$state/.last-watcher-beat"
+  orca_case pathless-terminal-unknown
+  printf '1\n' > "$RESP/1.exit"
+  printf '{"ok":true,"result":{"repo":{"id":"repo-pathless-terminal"}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"worktree":{"id":"wt-pathless-terminal"},"terminal":{"handle":"term-pathless-terminal"}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{}}\n' > "$RESP/4.out"
+  printf 'not-json\n' > "$RESP/5.out"
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 \
+    FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend orca 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "Orca spawn should fail when path parsing fails"
+  log_text=$(cat "$LOG")
+  assert_contains "$log_text" $'orca\x1f''terminal'$'\x1f''close'$'\x1f''--terminal'$'\x1f''term-pathless-terminal'$'\x1f''--json' \
+    "verified rollback did not attempt to stop the pathless terminal"
+  assert_no_grep $'orca\x1fworktree\x1frm' "$LOG" \
+    "unknown terminal state allowed destructive pathless worktree removal"
+  assert_present "$state/$id.meta" "unknown terminal state should preserve recovery metadata"
+  assert_grep 'orca_worktree_id=wt-pathless-terminal' "$state/$id.meta" "metadata missing pathless worktree id"
+  assert_grep 'terminal=term-pathless-terminal' "$state/$id.meta" "metadata missing pathless terminal id"
+  pass "fm-spawn.sh --backend orca: unknown terminal stop preserves pathless worktree and metadata"
 }
 
 test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
@@ -579,6 +671,9 @@ test_spawn_refuses_orca_nonisolated_worktree() {
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-bad"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-bad","path":"%s"},"terminal":{"handle":"term-bad"}}}\n' "$proj" > "$RESP/3.out"
+  printf '{"ok":true}\n' > "$RESP/4.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/5.out"
+  printf '{"ok":true}\n' > "$RESP/6.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
@@ -680,6 +775,9 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
   printf '{"ok":true,"result":{"repo":{"id":"repo-meta-fail"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-meta-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"handle":"term-meta-fail"}}}\n' > "$RESP/4.out"
+  printf '{"ok":true}\n' > "$RESP/5.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/6.out"
+  printf '{"ok":true}\n' > "$RESP/7.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
@@ -791,6 +889,9 @@ test_scout_teardown_removes_orca_worktree_via_helper() {
     "decisions_reviewed=1" "decision_keys="
   orca_case teardown
   printf '{"ok":true,"result":{"worktree":{"id":"wt-teardown","path":"%s"}}}\n' "$wt" > "$RESP/1.out"
+  printf '{"ok":true}\n' > "$RESP/2.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/3.out"
+  printf '{"ok":true}\n' > "$RESP/4.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -863,6 +964,9 @@ test_teardown_removes_orca_worktree_when_path_missing() {
     "backend=orca" "orca_worktree_id=wt-missing-path" \
     "decisions_reviewed=1" "decision_keys="
   orca_case missing-path
+  printf '{"ok":true}\n' > "$RESP/1.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/2.out"
+  printf '{"ok":true}\n' > "$RESP/3.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -891,12 +995,14 @@ test_teardown_preserves_metadata_when_orca_remove_error_json() {
   printf 'report\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
-    "window=fm-$id" "worktree=$wt" "project=$proj" \
+    "window=fm-$id" "terminal=term-remove-error" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
     "backend=orca" "orca_worktree_id=wt-remove-error" \
     "decisions_reviewed=1" "decision_keys="
   orca_case remove-error-teardown
-  printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/1.out"
+  printf '{"ok":true}\n' > "$RESP/1.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/2.out"
+  printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/3.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -987,6 +1093,9 @@ test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
     "backend=orca" "orca_worktree_id=wt-ship-match"
   orca_case ship-match
   printf '{"ok":true,"result":{"worktree":{"id":"wt-ship-match","path":"%s"}}}\n' "$wt" > "$RESP/1.out"
+  printf '{"ok":true}\n' > "$RESP/2.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/3.out"
+  printf '{"ok":true}\n' > "$RESP/4.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -1003,6 +1112,42 @@ test_ship_teardown_removes_orca_worktree_when_id_path_matches() {
     "teardown did not remove the matched Orca worktree"
   assert_absent "$state/$id.meta" "successful matched teardown should remove task metadata"
   pass "fm-teardown.sh backend=orca: ship teardown requires a matching Orca id path"
+}
+
+test_ship_teardown_rechecks_safety_after_terminal_stop() {
+  local proj wt data state config id out rc neutral
+  id="orcashipracez9"
+  proj="$TMP_ROOT/ship-race-project"
+  wt="$TMP_ROOT/ship-race-wt"
+  data="$TMP_ROOT/ship-race-data"
+  state="$TMP_ROOT/ship-race-state"
+  config="$TMP_ROOT/ship-race-config"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  mkdir -p "$data/$id" "$state" "$config"
+  touch "$state/.last-watcher-beat"
+  fm_write_meta "$state/$id.meta" \
+    "window=fm-$id" "terminal=term-ship-race" "worktree=$wt" "project=$proj" \
+    "harness=claude" "kind=ship" "mode=no-mistakes" "yolo=off" \
+    "backend=orca" "orca_worktree_id=wt-ship-race"
+  orca_case ship-race
+  printf '{"ok":true,"result":{"worktree":{"id":"wt-ship-race","path":"%s"}}}\n' "$wt" > "$RESP/1.out"
+  printf '{"ok":true}\n' > "$RESP/2.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/3.out"
+  neutral=$(neutral_fm_root "$CASE_DIR/neutral")
+  set +e
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    FM_ORCA_CLOSE_MUTATION="$wt/late-edit.txt" FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 \
+    FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 )
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "Orca ship teardown discarded an edit written during terminal stop (log: $(tr '\n' ';' < "$LOG"); status: $(git -C "$wt" status --porcelain 2>/dev/null | tr '\n' ';'))"
+  assert_contains "$out" "uncommitted changes" "post-stop safety refusal did not explain the late edit"
+  assert_present "$wt/late-edit.txt" "post-stop safety refusal lost the late worker edit"
+  assert_present "$state/$id.meta" "post-stop safety refusal removed task metadata"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm' \
+    "post-stop safety refusal removed the Orca worktree"
+  pass "fm-teardown.sh backend=orca: rechecks worktree safety after stopping the terminal"
 }
 
 test_ship_teardown_refuses_orca_unresolvable_worktree_id() {
@@ -1169,6 +1314,9 @@ test_secondmate_force_teardown_removes_orca_child_via_orca() {
     "backend=orca" "orca_worktree_id=wt-child-cleanup"
   orca_case secondmate-child-cleanup
   printf '{"ok":true,"result":{"worktree":{"id":"wt-child-cleanup","path":"%s"}}}\n' "$childwt" > "$RESP/1.out"
+  printf '{"ok":true}\n' > "$RESP/2.out"
+  printf '{"ok":false,"error":{"code":"terminal_handle_stale","message":"terminal gone"}}\n' > "$RESP/3.out"
+  printf '{"ok":true}\n' > "$RESP/4.out"
   add_tmux_fake "$FB"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
@@ -1282,6 +1430,7 @@ test_capture_falls_back_to_text_fields
 test_capture_fails_on_orca_error_json
 test_runtime_check_accepts_ready_orca_status
 test_runtime_check_refuses_unready_orca_status
+test_current_path_probe_sends_once_and_bounds_reads
 test_send_text_submit_verifies_empty_composer_after_enter
 test_send_text_submit_keeps_current_tail_when_limited
 test_send_text_submit_retries_when_composer_stays_pending
@@ -1301,7 +1450,8 @@ test_worktree_path_resolves_id
 test_dispatcher_sources_orca_and_routes_primitives
 test_json_get_ignores_undocumented_terminal_id_shapes
 test_worktree_and_terminal_helpers_parse_json
-test_worktree_create_removes_worktree_when_path_missing
+test_worktree_create_defers_pathless_cleanup_to_verified_rollback
+test_spawn_preserves_pathless_orca_worktree_when_terminal_stop_is_unknown
 test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails
 test_spawn_writes_orca_metadata_and_launches_harness
 test_spawn_refuses_orca_secondmate_before_home_mutation
@@ -1320,6 +1470,7 @@ test_teardown_preserves_metadata_when_orca_remove_error_json
 test_scout_teardown_refuses_orca_missing_report_when_path_missing
 test_ship_teardown_refuses_orca_missing_worktree_path
 test_ship_teardown_removes_orca_worktree_when_id_path_matches
+test_ship_teardown_rechecks_safety_after_terminal_stop
 test_ship_teardown_refuses_orca_unresolvable_worktree_id
 test_ship_teardown_refuses_orca_id_path_mismatch
 test_teardown_refuses_orca_missing_worktree_id

@@ -43,6 +43,26 @@ tests/fm-tmux-submit-busy.test.sh
 Expected structural matrix: real text on any content row is pending; all-empty complete boxes are empty; unreadable, incomplete, or unsafe boxes are unknown; and non-bordered panes retain cursor-row compatibility.
 Expected submit matrix: proven pending plus busy is accepted as queued; proven pending plus idle remains pending; ambiguous pending is never converted by the busy exception; and only a proven empty composer succeeds directly.
 
+### Host-root task routing
+
+The rebased host-root path was live-verified on 2026-07-26 with tmux 3.7b, Treehouse 2.0.0, and Codex CLI 0.145.0 on Linux.
+The command shape was:
+
+```sh
+cd "$host"
+TMUX_TMPDIR="$socket_dir" \
+FM_ROOT_OVERRIDE="$firstmate_root" \
+FM_HOME="$firstmate_home" \
+FM_HOST_ROOT="$host" \
+FM_BACKEND=tmux \
+  "$firstmate_root/bin/fm-spawn.sh" "$task_id" "$target_primary" \
+    --harness codex --scout
+```
+
+The worker observed its physical cwd equal to `FM_HOST_ROOT`, its target Git root equal to the physical `FM_TARGET_WORKTREE`, and the target as a detached linked worktree distinct from the clean primary checkout.
+It loaded the host and target `AGENTS.md` files, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
+The host's native startup lifecycle remained active, so host-owned lifecycle effects were allowed rather than treated as task edits.
+
 ## Herdr
 
 The compatibility floor is protocol 14.

@@ -1350,6 +1350,12 @@ test_projected_abort_cleanup_holds_presentation_lock() {
       : > "$STARTED"
       while [ ! -e "$PROCEED" ]; do sleep 0.01; done
     }
+    remove_spawn_artifacts() { :; }
+    spawn_herdr_presentation_order_lock_release() {
+      [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ] || return 0
+      HERDR_PRESENTATION_ORDER_LOCK_HELD=0
+      fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK"
+    }
     fm_lock_try_acquire "$LOCK" || exit 1
     HERDR_PRESENTATION_ORDER_LOCK_HELD=1
     HERDR_PRESENTATION_ORDER_LOCK=$LOCK

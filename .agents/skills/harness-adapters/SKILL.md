@@ -100,6 +100,26 @@ OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates wit
 Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.
 When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
 
+## Host-root task integration
+
+When `FM_HOST_ROOT` is set for an ordinary ship or scout, the harness starts from that physical host root and receives the isolated target separately as `FM_TARGET_WORKTREE`.
+The host's discovered instructions and lifecycle adapters remain authoritative; target instructions are read explicitly under the host-root brief before edits.
+FirstMate adds exactly one task turn-end signal without writing host configuration:
+
+| Harness | Additive task signal in host-root mode |
+|---|---|
+| claude | An additional state-owned settings file passed with `--settings`; Claude continues loading host project settings. |
+| codex | The existing per-launch `notify` command; host `.codex/hooks.json` remains untouched. |
+| opencode | A state-owned task plugin named through `OPENCODE_CONFIG_CONTENT`; host project plugins continue to auto-load from the launch cwd. |
+| pi | The existing explicit state-owned `-e` task extension; host project extensions continue to auto-load after host trust. |
+| grok | The guarded global FirstMate Stop hook reads a per-process `FM_GROK_TURNEND_TOKEN`; host project hooks remain untouched and no pointer is written into the host repository. |
+| kimi | The guarded global FirstMate Stop hook reads a per-process `FM_KIMI_TURNEND_TOKEN`; host configuration remains otherwise untouched and no pointer is written into the host repository. |
+
+Default worktree-root launches retain their existing hook locations and command shapes.
+Secondmate launches explicitly clear inherited `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` and retain their isolated-home adapters.
+
+[`docs/verification/supervision.md`](../../../docs/verification/supervision.md#host-root-task-integration) owns the dated lifecycle evidence and current live-verification limits for these task adapters.
+
 ## Launch profile axes
 
 `bin/fm-spawn.sh` accepts concrete `--harness`, `--model`, and `--effort` values chosen by firstmate at intake.
