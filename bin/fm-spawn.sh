@@ -230,12 +230,50 @@ esac
 
 HOST_MODE=0
 HOST_ROOT=
+MODE=
+YOLO=
 if fm_host_root_enabled; then
   fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
   if [ "$KIND" != secondmate ]; then
     HOST_ROOT=$(fm_host_root_resolve "$FM_ROOT") || exit $?
     HOST_MODE=1
   fi
+fi
+
+if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ]; then
+  host_idpart=${POS[0]:-}
+  host_idpart=${host_idpart%%=*}
+  host_projects=()
+  if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$host_idpart" ] \
+     && case "$host_idpart" in */*) false ;; *) true ;; esac; then
+    for host_pair in "${POS[@]}"; do
+      case "$host_pair" in *=*) host_projects+=("${host_pair#*=}") ;; esac
+    done
+  else
+    host_projects+=("${POS[1]:-}")
+  fi
+  for host_project in "${host_projects[@]}"; do
+    [ -n "$host_project" ] || continue
+    host_project_path=$host_project
+    case "$host_project_path" in
+      projects/*) host_project_path="$PROJECTS/${host_project_path#projects/}" ;;
+    esac
+    host_project_name=$(basename "$host_project")
+    if [ -d "$host_project_path" ]; then
+      host_project_name=$(basename "$(cd "$host_project_path" && pwd -P)")
+    fi
+    read -r host_mode host_yolo <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "$host_project_name")
+EOF
+    if [ "$host_mode" = local-only ]; then
+      echo "error: host-root mode does not support local-only project $host_project_name" >&2
+      exit 1
+    fi
+    if [ "${#host_projects[@]}" -eq 1 ]; then
+      MODE=$host_mode
+      YOLO=$host_yolo
+    fi
+  done
 fi
 
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -414,7 +452,10 @@ spawn_abort_cleanup() {
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
-    if [ -n "${ORCA_TERMINAL:-}" ] && ! fm_backend_stop_and_verify orca "$ORCA_TERMINAL"; then
+    if [ -z "${ORCA_TERMINAL:-}" ]; then
+      cleanup_failed=1
+      endpoint_stopped=0
+    elif ! fm_backend_stop_and_verify orca "$ORCA_TERMINAL"; then
       cleanup_failed=1
       endpoint_stopped=0
     fi
@@ -1696,9 +1737,11 @@ if [ "$KIND" = secondmate ]; then
   SECONDMATE_PROJECTS=$(secondmate_registry_value "$ID" projects || true)
 else
   PROJ_NAME=$(basename "$PROJ_ABS")
-  read -r MODE YOLO <<EOF
+  if [ -z "$MODE" ]; then
+    read -r MODE YOLO <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$PROJ_NAME")
 EOF
+  fi
 fi
 
 META_WINDOW=$T

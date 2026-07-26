@@ -905,7 +905,7 @@ fm_backend_target_state() {  # <backend> <target> [expected-label] -> present|ab
 # owner is for destructive cleanup paths that must not trust best-effort close.
 fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label]
   local backend=$1 target=$2 expected_label=${4:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown
-  [ -n "$target" ] || return 0
+  [ -n "$target" ] || { echo "error: missing backend endpoint id; refusing destructive cleanup" >&2; return 1; }
   case "$attempts" in ''|*[!0-9]*|0) attempts=20 ;; esac
   fm_backend_kill "$@" || return 1
   while [ "$i" -lt "$attempts" ]; do
