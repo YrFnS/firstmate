@@ -1254,6 +1254,7 @@ fi
 
 if [ "$TASK_HOST_MODE" -eq 0 ]; then
   if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
+    # shellcheck source=bin/fm-wake-lib.sh
     . "$SCRIPT_DIR/fm-wake-lib.sh"
     HERDR_PRESENTATION_FOCUS_LOCK=
     HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
