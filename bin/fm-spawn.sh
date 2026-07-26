@@ -256,7 +256,7 @@ if fm_host_root_enabled; then
   fi
 fi
 
-if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ]; then
+if [ "$HOST_MODE" -eq 1 ]; then
   host_idpart=${POS[0]:-}
   host_idpart=${host_idpart%%=*}
   host_projects=()
@@ -274,7 +274,7 @@ if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ]; then
     read -r host_mode host_yolo <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$host_project_name")
 EOF
-    if [ "$host_mode" = local-only ]; then
+    if [ "$KIND" = ship ] && [ "$host_mode" = local-only ]; then
       echo "error: host-root mode does not support local-only project $host_project_name" >&2
       exit 1
     fi
