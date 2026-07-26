@@ -204,9 +204,9 @@ Host mode separates four roots:
 - `FM_ROOT` is the tracked FirstMate code, skill, documentation, and script root.
 - `FM_HOME` is the private FirstMate operational home that owns `data/`, `state/`, `config/`, and `projects/`.
 - `FM_HOST_ROOT` is the host repository whose instructions, native lifecycle, and cwd remain authoritative.
-- `FM_TARGET_WORKTREE` is the per-task isolated target repository where code changes, Git operations, tests, builds, GitHub operations, and no-mistakes run.
+- `FM_TARGET_WORKTREE` is the per-task isolated target repository where code changes, Git operations, tests, builds, forge operations, and no-mistakes run.
 
-The physical target worktree must differ from both the target project's primary checkout and `FM_HOST_ROOT`.
+The physical target worktree must differ from the target project's primary checkout and must not overlap `FM_HOST_ROOT`.
 Ordinary ship and scout endpoints still acquire and validate their isolated target worktree first, retain it as `worktree=` metadata, then return the endpoint shell to the physical host root before launching the harness.
 A failed host transition stops and verifies the new endpoint before returning the acquired worktree, removes every task-owned pre-record artifact on successful rollback, and retains recovery metadata and the isolated path when endpoint termination or resource cleanup cannot be confirmed.
 An overlap refusal stops the endpoint but never returns or removes the overlapping path automatically.
