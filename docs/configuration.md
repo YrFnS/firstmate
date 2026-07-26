@@ -203,7 +203,8 @@ Every non-forced host-root ship teardown repeats worktree safety checks after th
 Host-root briefs carry `<!-- firstmate-execution-mode: host-root -->`, require the worker to read host instructions first and applicable target instructions before edits, keep the host read-only except for host-owned lifecycle effects, and require explicit target paths or scoped subshells.
 The same target scoping applies to the complete no-mistakes lifecycle, including doctor, initialization, run, gate responses, and follow-up help commands; no validation command may default to the host cwd.
 Spawn rejects a cwd-relative legacy brief in host mode rather than weakening that contract silently.
-Host-root ship tasks support `no-mistakes` and `direct-PR` delivery; brief generation, spawn, and scout promotion reject `local-only` because its guarded landing path changes the target project's primary checkout.
+Host-root ship brief generation and spawn support `no-mistakes` and `direct-PR` delivery but reject `local-only` because its guarded landing path changes the target project's primary checkout.
+Host-root scouts may inspect `local-only` targets and retain their configured mode and autonomy, but promotion rejects them while that mode remains active.
 
 Harness integration is additive.
 The [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md#host-root-task-integration) owns each harness's task-signal shape; none writes or replaces host hook configuration, and each signal is installed once.
