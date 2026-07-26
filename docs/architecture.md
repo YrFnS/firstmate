@@ -133,6 +133,14 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 ## Worktrees, not branches in your checkout
 
+The default launch cwd remains the isolated task worktree.
+When optional `FM_HOST_ROOT` mode is enabled, FirstMate separates its tracked code root, operational home, host instruction root, and target worktree instead: the backend acquires and validates the isolated target first, records it as `worktree=`, returns the endpoint to the physical host root, verifies that cwd, then launches the harness with exact `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` values.
+The target is rejected if it resolves to the host, and a failed host transition cleans the new endpoint and worktree or leaves recoverable metadata when cleanup itself fails.
+Host instructions and native lifecycle hooks remain authoritative because the harness starts from the host root, while the host-root brief requires applicable target instructions before edits and scopes every target operation explicitly.
+FirstMate task completion signals are added through harness launch configuration or per-process identity rather than by writing host hook files.
+Secondmates keep their isolated-home launch shape and clear both host variables.
+The full four-root contract and validation rules are owned by [configuration.md](configuration.md#host-root-mode-fm_host_root).
+
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
 

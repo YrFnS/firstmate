@@ -884,6 +884,45 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # classifier. Zellij remains unverified because its secondmate ghost-tab and
 # agent-process recovery path has not been empirically validated. Orca and cmux
 # do not support secondmate spawns.
+# Tri-state existence probe for destructive cleanup. Unlike the historical
+# boolean liveness helper above, an unreadable control plane is unknown rather
+# than absent and therefore cannot authorize worktree reuse.
+fm_backend_target_state() {  # <backend> <target> [expected-label] -> present|absent|unknown
+  local backend=$1 target=$2 expected_label=${3:-}
+  fm_backend_source "$backend" || { printf 'unknown'; return 0; }
+  case "$backend" in
+    tmux) fm_backend_tmux_target_state "$target" ;;
+    herdr) fm_backend_herdr_target_state "$target" ;;
+    zellij) fm_backend_zellij_target_state "$target" ;;
+    orca) fm_backend_orca_target_state "$target" ;;
+    cmux) fm_backend_cmux_target_state "$target" "$expected_label" ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# Stop a task endpoint and prove it disappeared before any caller recycles or
+# removes the task's worktree. Kill adapters remain idempotent; this stricter
+# owner is for destructive cleanup paths that must not trust best-effort close.
+fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label]
+  local backend=$1 target=$2 expected_label=${4:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown
+  [ -n "$target" ] || return 0
+  case "$attempts" in ''|*[!0-9]*|0) attempts=20 ;; esac
+  fm_backend_kill "$@" || return 1
+  while [ "$i" -lt "$attempts" ]; do
+    state=$(fm_backend_target_state "$backend" "$target" "$expected_label")
+    [ "$state" = absent ] && return 0
+    i=$((i + 1))
+    [ "$i" -ge "$attempts" ] || sleep "$delay"
+  done
+  if [ "$state" = present ]; then
+    echo "error: backend endpoint $target still exists after stop; refusing destructive cleanup" >&2
+  else
+    echo "error: backend endpoint $target could not be confirmed absent after stop; refusing destructive cleanup" >&2
+  fi
+  return 1
+}
+
+# Implement the recovery-grade state contract described above.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }

@@ -10,6 +10,7 @@
 # only a fallback when fetch fails (stale recorded SHAs must never win over a
 # reachable remote PR head). If neither PR head can be resolved, fall back to
 # the local branch with a warning. Without pr=, compare the local branch.
+# Host-root tasks bind to their recorded physical host cwd before guard or Git activity.
 # Usage: fm-review-diff.sh <task-id> [--stat]
 #   --stat prints only the stat summary; default prints stat summary plus full diff.
 set -eu
@@ -18,7 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-"$FM_ROOT/bin/fm-guard.sh" || true
+# shellcheck source=bin/fm-host-root-lib.sh
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
 
 usage() {
   echo "usage: fm-review-diff.sh <task-id> [--stat]" >&2
@@ -41,6 +43,9 @@ esac
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
+fm_host_root_assert_task_cwd "$FM_ROOT" "$META" || exit $?
+# The recorded host binding is established before this guard can repair state.
+"$FM_ROOT/bin/fm-guard.sh" || true
 
 WT=$(grep '^worktree=' "$META" | cut -d= -f2-)
 PROJ=$(grep '^project=' "$META" | cut -d= -f2-)

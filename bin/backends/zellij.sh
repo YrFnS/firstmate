@@ -325,8 +325,14 @@ fm_backend_zellij_tab_matches_label() {  # <session> <tab_id> <label>
 # spawn). Best-effort: a failure to restore never fails the spawn.
 #
 # Echoes "<tab_id> <pane_id>" on success.
+# Creation-state globals are consumed by fm-spawn after direct function calls.
+# shellcheck disable=SC2034
 fm_backend_zellij_create_task() {  # <session> <label> <cwd>
   local session=$1 label=$2 cwd=$3 title tabs dup prev_active tab_id pane_id
+  FM_BACKEND_CREATE_OCCURRED=0
+  FM_BACKEND_CREATED_TARGET=
+  FM_BACKEND_CREATED_ZELLIJ_TAB_ID=
+  FM_BACKEND_CREATED_ZELLIJ_PANE_ID=
   fm_backend_zellij_session_exists "$session" || { echo "error: zellij session '$session' does not exist; run container_ensure first" >&2; return 1; }
   title=$(fm_backend_zellij_scoped_title "$label")
   tabs=$(fm_backend_zellij_cli "$session" action list-tabs --json 2>/dev/null)
@@ -337,6 +343,8 @@ fm_backend_zellij_create_task() {  # <session> <label> <cwd>
   fi
   prev_active=$(printf '%s' "$tabs" | jq -r '.[]? | select(.active == true) | .tab_id' 2>/dev/null | head -1)
   tab_id=$(fm_backend_zellij_cli "$session" action new-tab --cwd "$cwd" --name "$title" 2>/dev/null | tr -d '[:space:]')
+  FM_BACKEND_CREATE_OCCURRED=1
+  FM_BACKEND_CREATED_ZELLIJ_TAB_ID=$tab_id
   case "$tab_id" in
     ''|*[!0-9]*)
       echo "error: zellij new-tab did not return a numeric tab id for '$title' (got '$tab_id'; session '$session' may not exist)" >&2
@@ -344,6 +352,8 @@ fm_backend_zellij_create_task() {  # <session> <label> <cwd>
       ;;
   esac
   pane_id=$(fm_backend_zellij_pane_for_tab "$session" "$tab_id")
+  FM_BACKEND_CREATED_ZELLIJ_PANE_ID=$pane_id
+  [ -z "$pane_id" ] || FM_BACKEND_CREATED_TARGET="$session:$pane_id"
   if [ -z "$pane_id" ]; then
     echo "error: could not find a terminal pane for zellij tab $tab_id (session '$session')" >&2
     return 1
@@ -379,6 +389,38 @@ fm_backend_zellij_target_ready() {  # <target> [expected-label]
     return $?
   fi
   fm_backend_zellij_pane_exists "$FM_BACKEND_ZELLIJ_SESSION" "$FM_BACKEND_ZELLIJ_PANE"
+}
+
+# Tri-state endpoint probe for destructive cleanup. Zellij action exit codes
+# cannot prove absence, so first require a readable session list and then parse
+# the pane list structurally; malformed or unreachable output stays unknown.
+fm_backend_zellij_target_state() {  # <target> -> present|absent|unknown
+  local sessions status panes
+  fm_backend_zellij_parse_target "$1" || { printf 'unknown'; return 0; }
+  sessions=$(zellij list-sessions --short --no-formatting 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    case "$sessions" in
+      *'No active zellij sessions found'*|*'No sessions found'*) printf 'absent' ;;
+      *) printf 'unknown' ;;
+    esac
+    return 0
+  fi
+  if ! printf '%s\n' "$sessions" | grep -qxF "$FM_BACKEND_ZELLIJ_SESSION"; then
+    printf 'absent'
+    return 0
+  fi
+  panes=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-panes --json 2>&1)
+  if ! printf '%s' "$panes" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf 'unknown'
+    return 0
+  fi
+  if printf '%s' "$panes" | jq -e --arg pane "$FM_BACKEND_ZELLIJ_PANE" \
+    '[.[]? | select((.id | tostring) == $pane and .is_plugin == false)] | length > 0' >/dev/null 2>&1; then
+    printf 'present'
+  else
+    printf 'absent'
+  fi
 }
 
 # fm_backend_zellij_current_path: the live pane's cwd, or empty on any error.

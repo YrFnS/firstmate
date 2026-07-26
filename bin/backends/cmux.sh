@@ -350,8 +350,14 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
 # workspace/surface/pane create all default focus to false) - no
 # focus-restore dance is needed, unlike zellij. Echoes "<workspace_id>
 # <surface_id>" on success.
+# Creation-state globals are consumed by fm-spawn after direct function calls.
+# shellcheck disable=SC2034
 fm_backend_cmux_create_task() {  # <label> <cwd>
   local label=$1 cwd=$2 title dup out wsid sfid
+  FM_BACKEND_CREATE_OCCURRED=0
+  FM_BACKEND_CREATED_TARGET=
+  FM_BACKEND_CREATED_CMUX_WORKSPACE_ID=
+  FM_BACKEND_CREATED_CMUX_SURFACE_ID=
   title=$(fm_backend_cmux_scoped_title "$label")
   dup=$(fm_backend_cmux_workspace_id_for_label "$title")
   if [ -n "$dup" ]; then
@@ -362,9 +368,13 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     echo "error: cmux new-workspace failed for '$title': $out" >&2
     return 1
   }
+  FM_BACKEND_CREATE_OCCURRED=1
   wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
+  FM_BACKEND_CREATED_CMUX_WORKSPACE_ID=$wsid
   [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation" >&2; return 1; }
   sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
+  FM_BACKEND_CREATED_CMUX_SURFACE_ID=$sfid
+  [ -z "$sfid" ] || FM_BACKEND_CREATED_TARGET="$wsid:$sfid"
   [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
   printf '%s %s' "$wsid" "$sfid"
 }
@@ -429,6 +439,36 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
     return 0
   fi
   fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE"
+}
+
+# Tri-state endpoint probe for destructive cleanup. A successful workspace
+# inventory proves presence or absence; socket/auth/JSON failures stay unknown.
+fm_backend_cmux_target_state() {  # <target> [expected-label] -> present|absent|unknown
+  local expected_label=${2:-} expected_title workspaces
+  fm_backend_cmux_parse_target "$1" || { printf 'unknown'; return 0; }
+  [ "$(fm_backend_cmux_ping_state)" = ok ] || { printf 'unknown'; return 0; }
+  workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>&1) || {
+    printf 'unknown'
+    return 0
+  }
+  if ! printf '%s' "$workspaces" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1; then
+    printf 'unknown'
+    return 0
+  fi
+  if printf '%s' "$workspaces" | jq -e --arg id "$FM_BACKEND_CMUX_WORKSPACE" \
+    'any(.workspaces[]?; .id == $id)' >/dev/null 2>&1; then
+    printf 'present'
+    return 0
+  fi
+  if [ -n "$expected_label" ]; then
+    expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
+    if printf '%s' "$workspaces" | jq -e --arg title "$expected_title" \
+      'any(.workspaces[]?; .title == $title)' >/dev/null 2>&1; then
+      printf 'present'
+      return 0
+    fi
+  fi
+  printf 'absent'
 }
 
 # fm_backend_cmux_current_path: the live foreground process's cwd, or empty on
