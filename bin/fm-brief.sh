@@ -130,6 +130,17 @@ if fm_host_root_enabled; then
   fi
 fi
 
+HOST_SHIP_MODE=
+if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ] && [ -n "${POS[1]:-}" ]; then
+  read -r HOST_SHIP_MODE _ <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "${POS[1]}")
+EOF
+  if [ "$HOST_SHIP_MODE" = local-only ]; then
+    echo "error: host-root mode does not support local-only project ${POS[1]}" >&2
+    exit 1
+  fi
+fi
+
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"
@@ -361,9 +372,13 @@ fi
 # Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief because the worker never owns approval decisions;
 # firstmate applies the authority contract in AGENTS.md section 7, so discard it.
-read -r MODE _ <<EOF
+if [ -n "$HOST_SHIP_MODE" ]; then
+  MODE=$HOST_SHIP_MODE
+else
+  read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
+fi
 
 case "$MODE" in
   direct-PR)
