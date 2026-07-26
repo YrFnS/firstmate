@@ -317,6 +317,11 @@ if fm_host_root_enabled; then
   fi
 fi
 
+if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ] && [ "$MODE" = local-only ]; then
+  echo "error: host-root mode does not support local-only delivery" >&2
+  exit 1
+fi
+
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh). Anchor to FM_ROOT because host
 # mode deliberately runs from a different repository.
@@ -493,7 +498,10 @@ spawn_abort_cleanup() {
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
-    if [ -n "${ORCA_TERMINAL:-}" ] && ! fm_backend_stop_and_verify orca "$ORCA_TERMINAL"; then
+    if [ -z "${ORCA_TERMINAL:-}" ]; then
+      cleanup_failed=1
+      endpoint_stopped=0
+    elif ! fm_backend_stop_and_verify orca "$ORCA_TERMINAL"; then
       cleanup_failed=1
       endpoint_stopped=0
     fi

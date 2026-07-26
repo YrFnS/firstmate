@@ -1635,7 +1635,7 @@ if [ "$TASK_HOST_MODE" -eq 1 ]; then
     ORCA_PATH_MATCH_VERIFIED=1
   fi
   stop_task_endpoint_and_verify || exit 1
-  if [ "$BACKEND" = orca ] && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
+  if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
     validate_worktree_teardown_safety_with_lock_cleanup || exit 1
   fi
   if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
