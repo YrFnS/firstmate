@@ -30,5 +30,10 @@ echo "kind=ship" >> "$TMP"
 mv "$TMP" "$META"
 
 HOME_Q=$(printf '%q' "$FM_HOME")
+SEND=bin/fm-send.sh
+if grep -q '^host_root=.' "$META"; then
+  FM_ROOT_REAL=$(cd "$FM_ROOT" && pwd -P)
+  SEND=$(fm_host_root_shell_quote "$FM_ROOT_REAL/bin/fm-send.sh")
+fi
 echo "promoted $ID to ship (teardown protection restored)"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+echo "next: FM_HOME=$HOME_Q $SEND fm-$ID '<ship instructions: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"

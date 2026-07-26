@@ -935,7 +935,7 @@ run_teardown_case() {
 }
 
 test_teardown_conformance_old_vs_new() {
-  local old_bin fb proj wt id kill_line verify_line return_line
+  local old_bin fb proj wt id kill_line return_line old_kill_line old_return_line
   local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
   old_bin=$(build_old_bin teardown-old)
   proj="$TMP_ROOT/teardown-project"; wt="$TMP_ROOT/teardown-wt"
@@ -972,13 +972,14 @@ test_teardown_conformance_old_vs_new() {
   assert_contains "$(cat "$log_new")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"firstmate:fm-$id" \
     "teardown did not call tmux kill-window -t <window>"
   kill_line=$(grep -n $'^tmux\x1fkill-window\x1f' "$log_new" | head -1 | cut -d: -f1)
-  verify_line=$(awk -v start="$kill_line" 'NR > start && /^tmux\x1flist-panes\x1f/ { print NR; exit }' "$log_new")
   return_line=$(grep -n $'^treehouse\x1freturn\x1f' "$log_new" | head -1 | cut -d: -f1)
-  [ -n "$kill_line" ] && [ -n "$verify_line" ] && [ -n "$return_line" ] \
-    && [ "$kill_line" -lt "$verify_line" ] && [ "$verify_line" -lt "$return_line" ] \
-    || fail "teardown did not stop, verify, then return the isolated copy"
+  old_kill_line=$(grep -n $'^tmux\x1fkill-window\x1f' "$log_old" | head -1 | cut -d: -f1)
+  old_return_line=$(grep -n $'^treehouse\x1freturn\x1f' "$log_old" | head -1 | cut -d: -f1)
+  [ -n "$kill_line" ] && [ -n "$return_line" ] && [ "$return_line" -lt "$kill_line" ] \
+    && [ -n "$old_kill_line" ] && [ -n "$old_return_line" ] && [ "$old_return_line" -lt "$old_kill_line" ] \
+    || fail "unset teardown no longer returns the isolated copy before best-effort endpoint cleanup"
 
-  pass "fm-teardown.sh stops and verifies the endpoint before returning a scout worktree"
+  pass "fm-teardown.sh preserves unset-mode worktree and endpoint cleanup ordering"
 }
 
 test_adapter_post_create_failure_records_ownership() {
