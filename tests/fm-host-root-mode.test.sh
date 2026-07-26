@@ -62,6 +62,8 @@ test_resolution_and_validation() {
   if paths_overlap "$host" "$TMP/host-with-similar-prefix"; then
     fail "sibling paths with a shared prefix were classified as overlapping"
   fi
+  paths_overlap / "$host" || fail "filesystem root was not classified as an ancestor"
+  paths_overlap "$host" / || fail "filesystem root was not classified as an enclosing target"
   pass "host-root library resolves physical paths and rejects unsafe, harness-specific, or overlapping roots"
 }
 
@@ -102,7 +104,7 @@ SH
 }
 
 test_host_command_rendering() {
-  local host="$TMP/render & host" home="$TMP/render-home" fake_root="$TMP/FirstMate & root's copy" rendered supervision command argv
+  local host="$TMP/render & host" home="$TMP/render-home" fake_root="$TMP/FirstMate & root's copy" rendered supervision command argv harness
   make_host "$host"; mkdir -p "$home/state" "$home/config" "$fake_root/bin"
   argv="$TMP/rendered-argv"
   cat > "$fake_root/bin/argv-probe" <<'SH'
@@ -122,6 +124,12 @@ SH
   command=$(printf '%s\n' "$supervision" | sed -n 's/.*checkpoint: \(.*\) --seconds.*/\1/p')
   FM_ARGV_LOG="$argv" bash -c "$command --seconds 7"
   [ "$(cat "$argv")" = $'--seconds\n7' ] || fail "rendered supervision command did not preserve argv"
+  for harness in claude codex grok; do
+    supervision=$(FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" \
+      "$ROOT/bin/fm-supervision-instructions.sh" --harness "$harness")
+    assert_contains "$supervision" "FirstMate & root'\\''s copy/bin'/fm-" \
+      "$harness ordinary-wake command did not use the absolute FirstMate path"
+  done
   pass "host mode shell-quotes absolute commands and preserves argv"
 }
 
@@ -187,7 +195,7 @@ case "${1:-}" in
     fi
     ;;
   list-windows) [ -z "${FM_EXISTING_WINDOW:-}" ] || printf '%s\n' "$FM_EXISTING_WINDOW" ;;
-  list-panes) [ ! -f "$endpoint" ] || printf '%%1|@1|test-session:fm-rollback-stuck|test-session:1.0\n' ;;
+  list-panes) [ ! -f "$endpoint" ] || printf '%%1|@1|%s|test-session:1.0\n' "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" ;;
   has-session|new-session|set-window-option) ;;
   new-window) : > "$endpoint"; printf '%%1\n' ;;
   kill-window) [ "${FM_REFUSE_STOP:-0}" = 1 ] || rm -f "$endpoint" ;;
@@ -452,6 +460,10 @@ test_mutators_require_host_cwd() {
   expect_code 2 "$status" "fm-merge-local must reject a host cwd mismatch"
   assert_present "$home/state/lane.meta" "local merge mutated task state before host validation"
   status=0
+  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-merge-local.sh" lane 2>&1) || status=$?
+  expect_code 1 "$status" "fm-merge-local must refuse host-root local-only tasks"
+  assert_contains "$out" 'local-only merge is unavailable for host-root task' "host-root local merge refusal was not explicit"
+  status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-pr-merge.sh" lane https://github.com/example/repo/pull/1 2>&1) || status=$?
   expect_code 2 "$status" "fm-pr-merge must reject a host cwd mismatch"
   assert_present "$home/state/lane.meta" "PR merge mutated task state before host validation"
@@ -468,6 +480,10 @@ test_mutators_require_host_cwd() {
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
   expect_code 2 "$status" "fm-promote must reject a host cwd mismatch"
   grep -qx 'kind=scout' "$home/state/scout.meta" || fail "promote mutated task metadata before host validation"
+  status=0
+  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
+  expect_code 0 "$status" "fm-promote rejected a recorded host-root scout"
+  assert_contains "$out" "'$ROOT/bin/fm-send.sh'" "host-root promotion did not print a quoted absolute fm-send path"
   status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-check-register.sh" lane 2>&1) || status=$?
   expect_code 2 "$status" "fm-check-register must reject a host cwd mismatch"
@@ -510,11 +526,12 @@ test_secondmate_actions_keep_supervisor_host_authority() {
 }
 
 test_spawn_rollback_is_transactional() {
-  local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" uncertain_wt="$TMP/rollback-uncertain-wt" fb log current tree_log out status=0
+  local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" uncertain_wt="$TMP/rollback-uncertain-wt" unset_wt="$TMP/rollback-unset-wt" fb log current tree_log out status=0
   make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
   git -C "$project" worktree add -q --detach "$stuck_wt"
   git -C "$project" worktree add -q --detach "$uncertain_wt"
+  git -C "$project" worktree add -q --detach "$unset_wt"
   for id in rollback-clean rollback-stuck rollback-uncertain; do
     (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
       "$ROOT/bin/fm-brief.sh" "$id" target >/dev/null 2>&1)
@@ -560,7 +577,91 @@ test_spawn_rollback_is_transactional() {
   assert_present "/tmp/fm-rollback-uncertain" "ambiguous Enter failure removed its task temp root"
   rm -rf "/tmp/fm-rollback-uncertain"
   rm -f "$home/state/rollback-uncertain.meta" "$home/state/rollback-uncertain.pi-ext.ts" "$current.endpoint"
-  pass "spawn rollback cleans pre-launch failures and preserves ambiguous launch submissions"
+
+  env -u FM_HOST_ROOT FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" rollback-unset target >/dev/null 2>&1
+  : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
+  out=$(cd "$host" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_FAIL_LAUNCH_SEND=1 FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-unset.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$unset_wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" rollback-unset "$project" pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "unset-mode injected launch failure unexpectedly succeeded"
+  assert_no_grep 'kill-window' "$log" "unset-mode launch failure changed upstream endpoint cleanup"
+  assert_no_grep 'return --force' "$tree_log" "unset-mode launch failure changed upstream worktree cleanup"
+  assert_present "$home/state/rollback-unset.meta" "unset-mode launch failure removed upstream task metadata"
+  assert_present "$current.endpoint" "unset-mode launch failure stopped the endpoint"
+  rm -rf "/tmp/fm-rollback-unset"
+  rm -f "$home/state/rollback-unset.meta" "$home/state/rollback-unset.pi-ext.ts" "$current.endpoint"
+  pass "spawn rollback stays host-scoped and preserves ambiguous launch submissions"
+}
+
+test_decision_actions_use_durable_host_owner() {
+  local host="$TMP/decision-host" home="$TMP/decision-home" id=decision-scout fb owner out status=0
+  make_host "$host"
+  mkdir -p "$home/data/$id" "$home/state" "$home/config"
+  printf '# Decision report\n' > "$home/data/$id/report.md"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf 'window=fake:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=scout\n' \
+    "$id" "$host" > "$home/state/$id.meta"
+  fb=$(fm_fakebin "$TMP/fake-decision-owner")
+  cat > "$fb/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "--version ") printf '%s\n' 'tasks-axi 0.2.2' ;;
+  "update --help") printf '%s\n' '--archive-body' ;;
+  "mv --help") printf '%s\n' '[<id>...]' ;;
+  "hold --help") printf '%s\n' '--kind captain' ;;
+esac
+SH
+  chmod +x "$fb/tasks-axi"
+  (cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-decision-hold.sh" complete "$id" --none >/dev/null) \
+    || fail "live host-root completion could not persist ownership"
+  owner="$home/data/$id/host-root"
+  assert_grep "host_root=$host" "$owner" "completion did not persist the recorded host owner"
+  rm "$home/state/$id.meta"
+  (cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-decision-hold.sh" complete "$id" --none >/dev/null) \
+    || fail "post-metadata completion rejected its durable host owner"
+  rm "$owner"
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-decision-hold.sh" complete "$id" --none 2>&1) || status=$?
+  expect_code 1 "$status" "post-metadata completion trusted ambient host authority"
+  assert_contains "$out" 'has no durable recorded host owner' "missing durable host owner refusal was not explicit"
+  pass "post-metadata decision actions require durable recorded host ownership"
+}
+
+test_host_teardown_requires_confirmed_stop() {
+  local host="$TMP/teardown-host" home="$TMP/teardown-home" project="$TMP/teardown-project" wt="$TMP/teardown-wt" fb log current tree_log out status=0 kill_line verify_line return_line
+  make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; fm_git_init_commit "$project"
+  git -C "$project" worktree add -q --detach "$wt"
+  printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\n' \
+    "$wt" "$host" "$project" > "$home/state/host-teardown.meta"
+  fb=$(make_fakebin "$TMP/fake-host-teardown")
+  log="$TMP/host-teardown.log"; current="$TMP/host-teardown.current"; tree_log="$TMP/host-teardown-treehouse.log"
+  printf '%s\n' "$host" > "$current"; : > "$current.endpoint"; : > "$log"; : > "$tree_log"
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-teardown.sh" host-teardown --force 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "host-root teardown accepted an unconfirmed endpoint stop"
+  assert_no_grep 'return --force' "$tree_log" "host-root teardown recycled work before confirming endpoint absence"
+  assert_present "$home/state/host-teardown.meta" "host-root teardown removed recovery metadata after stop refusal"
+
+  : > "$log"; : > "$tree_log"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-teardown.sh" host-teardown --force 2>&1) || status=$?
+  expect_code 0 "$status" "host-root teardown failed after confirmed endpoint stop: $out"
+  kill_line=$(grep -n 'kill-window' "$log" | tail -1 | cut -d: -f1)
+  verify_line=$(awk -v start="$kill_line" 'NR > start && /list-panes/ { print NR; exit }' "$log")
+  return_line=$(grep -n 'return --force' "$tree_log" | head -1 | cut -d: -f1)
+  [ -n "$kill_line" ] && [ -n "$verify_line" ] && [ -n "$return_line" ] \
+    || fail "host-root teardown did not stop, verify, and return its isolated copy"
+  pass "host-root teardown confirms endpoint absence before worktree cleanup"
 }
 
 test_task_actions_use_recorded_host_root() {
@@ -630,5 +731,7 @@ test_all_harnesses_add_one_task_safeguard
 test_mutators_require_host_cwd
 test_secondmate_actions_keep_supervisor_host_authority
 test_spawn_rollback_is_transactional
+test_decision_actions_use_durable_host_owner
+test_host_teardown_requires_confirmed_stop
 test_task_actions_use_recorded_host_root
 test_spawn_rejects_old_brief_and_secondmate_clears_roots

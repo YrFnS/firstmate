@@ -85,12 +85,28 @@ validate_one_line() {  # <label> <value>
 }
 
 assert_origin_host() {  # <origin-id>
-  local origin=$1 meta="$STATE/$1.meta"
+  local origin=$1 meta="$STATE/$1.meta" owner="$DATA/$1/host-root"
   if [ -f "$meta" ]; then
     fm_host_root_assert_task_cwd "$FM_ROOT" "$meta"
-  else
-    fm_host_root_assert_session_cwd "$FM_ROOT"
+  elif [ -e "$owner" ] || [ -L "$owner" ]; then
+    [ -f "$owner" ] && [ ! -L "$owner" ] || fail "origin host owner is not a regular file: $owner"
+    fm_host_root_assert_task_cwd "$FM_ROOT" "$owner"
+  elif fm_host_root_enabled; then
+    fail "origin $origin has no durable recorded host owner"
   fi
+}
+
+record_origin_host() {  # <origin-id> <meta>
+  local origin=$1 meta=$2 recorded owner="$DATA/$1/host-root"
+  recorded=$(meta_value "$meta" host_root)
+  [ -n "$recorded" ] || return 0
+  if [ -e "$owner" ] || [ -L "$owner" ]; then
+    [ -f "$owner" ] && [ ! -L "$owner" ] || fail "origin host owner is not a regular file: $owner"
+    [ "$(cat "$owner")" = "host_root=$recorded" ] || fail "origin host owner does not match task metadata: $owner"
+    return 0
+  fi
+  (umask 077; printf 'host_root=%s\n' "$recorded" > "$owner") \
+    || fail "could not persist origin host owner: $owner"
 }
 
 sha256_text() {  # <text>
@@ -332,6 +348,9 @@ EOF
 $open
 EOF
 
+  if [ "$has_meta" = 1 ]; then
+    record_origin_host "$origin" "$meta"
+  fi
   if [ "$has_meta" = 1 ]; then
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
       printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
