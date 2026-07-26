@@ -1288,9 +1288,13 @@ test_teardown_missing_busy_sidecar_completes() {
 }
 
 test_unconfirmed_stop_preserves_worktree() {
-  local case_dir rc tree_log
+  local case_dir rc tree_log host
   case_dir=$(make_case stop-unconfirmed)
   write_meta "$case_dir" local-only ship
+  host="$case_dir/host"
+  mkdir -p "$host"
+  : > "$host/AGENTS.md"
+  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
   tree_log="$case_dir/treehouse.log"
   cat > "$case_dir/fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
@@ -1298,8 +1302,9 @@ printf '%s\n' "$*" >> "$FM_TREEHOUSE_LOG"
 SH
   chmod +x "$case_dir/fakebin/treehouse"
   set +e
-  FM_FAKE_TMUX_STOP_FAIL=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TREEHOUSE_LOG="$tree_log" \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_TMUX_STOP_FAIL=1 FM_BACKEND_STOP_ATTEMPTS=1 \
+    FM_BACKEND_STOP_DELAY=0 FM_TREEHOUSE_LOG="$tree_log" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr")
   rc=$?
   set -e
   expect_code 1 "$rc" "stop-unconfirmed: teardown must fail when endpoint termination cannot be confirmed"
@@ -1854,16 +1859,21 @@ test_herdr_projection_teardown_retires_journal_only_after_confirmed_close() {
 }
 
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
-  local case_dir log closed restored status=0
+  local case_dir log closed restored host status=0
   case_dir=$(make_case herdr-projection-unconfirmed-close)
   write_meta "$case_dir" local-only ship
+  host="$case_dir/host"
+  mkdir -p "$host"
+  : > "$host/AGENTS.md"
+  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
   configure_herdr_projection_teardown_case "$case_dir"
   log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
 
-  local rc=0
-  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_PRESENCE_UNKNOWN=1 \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-  [ "$rc" -ne 0 ] \
+  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_PRESENCE_UNKNOWN=1 \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
+    || status=$?
+  [ "$status" -ne 0 ] \
     || fail "herdr-projection-unconfirmed-close: teardown reported success after an unknown post-close presence read"
   [ -e "$closed" ] \
     || fail "herdr-projection-unconfirmed-close: regression did not exercise an attempted close"
@@ -1881,14 +1891,19 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
 }
 
 test_herdr_projection_teardown_retains_journal_when_close_fails() {
-  local case_dir log closed restored status=0
+  local case_dir log closed restored host status=0
   case_dir=$(make_case herdr-projection-close-failed)
   write_meta "$case_dir" local-only ship
+  host="$case_dir/host"
+  mkdir -p "$host"
+  : > "$host/AGENTS.md"
+  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
   configure_herdr_projection_teardown_case "$case_dir"
   log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
 
-  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
     || status=$?
   [ "$status" -ne 0 ] || fail "herdr-projection-unconfirmed-close: teardown accepted an unconfirmed endpoint stop"
   [ -e "$case_dir/state/task-x1.herdr-presentation" ] \

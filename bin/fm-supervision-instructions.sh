@@ -167,10 +167,10 @@ repair_line() {
 ordinary_wake_line() {
   case "$HARNESS" in
     claude)
-      printf '%s\n' '- Ordinary wake: the Stop-owned auto-arm (bin/fm-claude-stop-autoarm.sh) already owns watcher continuity; drain and handle the wake, and do not arm another cycle yourself.'
+      printf '%s%s%s\n' '- Ordinary wake: the Stop-owned auto-arm (' "$FM_BIN_PREFIX" '/fm-claude-stop-autoarm.sh) already owns watcher continuity; drain and handle the wake, and do not arm another cycle yourself.'
       ;;
     codex)
-      printf '%s\n' '- Ordinary wake: take the next foreground bin/fm-watch-checkpoint.sh checkpoint as directed below.'
+      printf '%s%s%s\n' '- Ordinary wake: take the next foreground ' "$FM_BIN_PREFIX" '/fm-watch-checkpoint.sh checkpoint as directed below.'
       ;;
     pi|pi-signed)
       printf '%s\n' '- Ordinary wake: the Pi extension already owns watcher continuity; do not arm another cycle.'
@@ -179,7 +179,7 @@ ordinary_wake_line() {
       printf '%s\n' '- Ordinary wake: the OpenCode TUI plugin already owns watcher continuity; do not arm manually.'
       ;;
     grok)
-      printf '%s\n' '- Ordinary wake: re-arm exactly one bin/fm-watch-arm.sh Grok tracked background task as directed below.'
+      printf '%s%s%s\n' '- Ordinary wake: re-arm exactly one ' "$FM_BIN_PREFIX" '/fm-watch-arm.sh Grok tracked background task as directed below.'
       ;;
     *)
       printf '%s\n' '- Ordinary wake: follow the continuation in the harness protocol below; do not use shell &.'

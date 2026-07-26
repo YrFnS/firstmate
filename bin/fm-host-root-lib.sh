@@ -103,8 +103,11 @@ fm_host_root_assert_task_cwd() {
 
 fm_host_root_paths_overlap() {
   local host=$1 target=$2
-  case "$target/" in "$host/"*) return 0 ;; esac
-  case "$host/" in "$target/"*) return 0 ;; esac
+  [ "$host" = "$target" ] && return 0
+  [ "$host" = / ] && return 0
+  [ "$target" = / ] && return 0
+  case "$target" in "$host"/*) return 0 ;; esac
+  case "$host" in "$target"/*) return 0 ;; esac
   return 1
 }
 
