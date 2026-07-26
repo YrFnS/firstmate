@@ -205,6 +205,44 @@ The full zellij home label also includes a short hash of the resolved `FM_ROOT` 
 For the cmux backend, `FM_CONFIG_OVERRIDE` overrides where `config/cmux-socket-password` is read from, while `FM_HOME` determines the default config path and readable home prefix embedded in workspace titles.
 The full cmux home label also includes a short hash of the resolved `FM_ROOT` path, and there is no per-home container split.
 
+## Host-root mode (FM_HOST_ROOT)
+
+`FM_HOST_ROOT` is an optional physical instruction root and harness startup cwd for a primary FirstMate home.
+It is a low-level runtime contract for an explicit host integration, not an installer: setting the variable alone does not load FirstMate's supervisor policy or adapters into another repository.
+Unset or empty preserves the normal behavior in which FirstMate runs from its tracked code root.
+When set, the caller must already have loaded the FirstMate policy and required harness adapters additively, the value must resolve to an existing directory containing the cross-harness `AGENTS.md` instruction surface, it must differ from `FM_ROOT`, and the supervisor must be launched with its physical cwd at that directory.
+`bin/fm-session-start.sh` validates that contract before lock acquisition or any bootstrap mutation.
+
+Host mode separates four roots:
+
+- `FM_ROOT` is the tracked FirstMate code, skill, documentation, and script root.
+- `FM_HOME` is the private FirstMate operational home that owns `data/`, `state/`, `config/`, and `projects/`.
+- `FM_HOST_ROOT` is the host repository whose instructions, native lifecycle, and cwd remain authoritative.
+- `FM_TARGET_WORKTREE` is the per-task isolated target repository where code changes, Git operations, tests, builds, GitHub operations, and no-mistakes run.
+
+The physical target worktree must differ from both the target project's primary checkout and `FM_HOST_ROOT`.
+Ordinary ship and scout endpoints still acquire and validate their isolated target worktree first, retain it as `worktree=` metadata, then return the endpoint shell to the physical host root before launching the harness.
+A failed host transition stops and verifies the new endpoint before returning the acquired worktree, removes every task-owned pre-record artifact on successful rollback, and retains recovery metadata and the isolated path when endpoint termination or resource cleanup cannot be confirmed.
+An overlap refusal stops the endpoint but never returns or removes the overlapping path automatically.
+An unconfirmed final launch submission retains the endpoint, worktree, task safeguards, and metadata because the worker may already be running.
+The child receives exact `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` values, while task actions bind to the recorded physical `host_root=` before reading or changing task data and review, merge, evidence, and teardown continue to use the recorded `worktree=` path.
+Teardown stops and verifies the recorded worker endpoint before changing or returning its isolated copy.
+Orca ship teardown repeats worktree safety checks after the terminal is confirmed stopped and before forced worktree removal.
+Host-root briefs carry `<!-- firstmate-execution-mode: host-root -->`, require the worker to read host instructions first and applicable target instructions before edits, keep the host read-only except for host-owned lifecycle effects, and require explicit target paths or scoped subshells.
+The same target scoping applies to the complete no-mistakes lifecycle, including doctor, initialization, run, gate responses, and follow-up help commands; no validation command may default to the host cwd.
+Spawn rejects a cwd-relative legacy brief in host mode rather than weakening that contract silently.
+
+Harness integration is additive.
+Claude receives an additional task settings file through `--settings`, Codex retains its launch-command notification, OpenCode receives an explicit task plugin in addition to host project plugins, Pi receives its explicit task extension, and Grok and Kimi use per-process task tokens consumed by their guarded global hooks.
+None of these paths writes or replaces host hook configuration, and each task signal is installed once.
+The host repository's own lifecycle hooks continue to load from the host cwd.
+Host-root ordinary tasks reject raw launch commands because an unverified command cannot guarantee the required task completion safeguard.
+
+Secondmates are intentionally outside host-root mode.
+Creating a secondmate from a host-mode primary still requires the physical host cwd before brief or spawn mutation.
+A secondmate still launches from its isolated FirstMate home, receives neither `host_root=` metadata nor host-root brief semantics, and its launch explicitly clears inherited `FM_HOST_ROOT` and `FM_TARGET_WORKTREE`.
+A secondmate's own ordinary crews can opt in only through that home's own independently configured primary environment; the main home's roots never leak across the boundary.
+
 ## Harness support
 
 claude, codex, opencode, pi, pi-signed, grok, kimi, and cursor are empirically verified for crewmate and secondmate launches; [README requirements](../README.md#requirements) own the set supported for the primary session.
@@ -240,7 +278,8 @@ The inherited-local-material contract is owned by [`secondmate-provisioning`](..
 Those inherited values are defaults and rules only; `fm-spawn` still permits a consciously chosen explicit runtime outside the config.
 `config/secondmate-harness` is not inherited because secondmates do not launch secondmates.
 For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
-For Kimi crews, `fm-spawn.sh` runs `fm-kimi-turnend-hook.sh install`, drops a per-task `.fm-kimi-turnend` pointer in the worktree, and records the matching private registry token for teardown.
+For Kimi crews, `fm-spawn.sh` runs `fm-kimi-turnend-hook.sh install` and records a private registry token for teardown.
+Default launches also drop a per-task `.fm-kimi-turnend` pointer in the worktree, while host-root launches pass the same token only through `FM_KIMI_TURNEND_TOKEN` and never write a pointer into the host repository.
 Kimi continues to use the captain's normal Kimi home, including the existing config, skills, and memory; Firstmate does not create an isolated Kimi home.
 The Kimi installer requires an existing regular non-symlink `~/.kimi-code/config.toml`, `python3` with `tomllib`, and `jq`; it validates but never serializes the captain's TOML and refuses before writing when the config is missing, malformed, or surprising or when either tool requirement is unavailable.
 Its `remove` action excises only the marker-delimited Firstmate region and removes Firstmate's hook files.
@@ -511,6 +550,8 @@ Runtime tuning via environment variables (defaults shown):
 
 ```sh
 FM_HOME=                 # optional operational home for most scripts, unset means this repo root; fm-send requires it explicitly
+FM_HOST_ROOT=            # optional physical host instruction root and primary/ordinary-worker cwd; unset preserves normal behavior
+FM_TARGET_WORKTREE=      # spawn-owned exact isolated target path for a host-root worker; secondmates clear it
 FM_ROOT_OVERRIDE=        # override firstmate repo root, tangle-guard target, and zellij/cmux home-title hash; also legacy whole-root override when FM_HOME is unset
 FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests

@@ -205,6 +205,26 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
+### Host-root task routing
+
+The rebased host-root path was live-verified on 2026-07-26 with tmux 3.7b, Treehouse 2.0.0, and Codex CLI 0.145.0 on Linux.
+The command shape was:
+
+```sh
+cd "$host"
+TMUX_TMPDIR="$socket_dir" \
+FM_ROOT_OVERRIDE="$firstmate_root" \
+FM_HOME="$firstmate_home" \
+FM_HOST_ROOT="$host" \
+FM_BACKEND=tmux \
+  "$firstmate_root/bin/fm-spawn.sh" "$task_id" "$target_primary" \
+    --harness codex --scout
+```
+
+The worker observed its physical cwd equal to `FM_HOST_ROOT`, its target Git root equal to the physical `FM_TARGET_WORKTREE`, and the target as a detached linked worktree distinct from the clean primary checkout.
+It loaded the host and target `AGENTS.md` files, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
+The host's native startup lifecycle remained active, so host-owned lifecycle effects were allowed rather than treated as task edits.
+
 ## Herdr
 
 The compatibility floor is protocol 14.

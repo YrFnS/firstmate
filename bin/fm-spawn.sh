@@ -113,6 +113,8 @@
 #   a failed or inconclusive probe omits it so older Pi versions remain launchable.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
+#   Host-root ordinary tasks reject that escape hatch because only a
+#   named verified adapter can preserve the required task completion safeguard.
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -138,6 +140,13 @@
 #   origin, resolves the current remote default branch, and resets to its tip.
 #   An unreachable origin, unresolved default branch, or non-clean worktree
 #   refuses the spawn rather than risking a PR based on stale history.
+#   With optional
+#   FM_HOST_ROOT set, validation happens before the guard or endpoint mutation;
+#   the endpoint then returns to that physical host cwd and the child receives
+#   the isolated target as FM_TARGET_WORKTREE. Failed spawns before launch submission
+#   stop and verify the endpoint before returning the isolated copy, remove task-owned
+#   pre-record artifacts on success, and retain recovery metadata when rollback is
+#   incomplete. An ambiguous final Enter retains the endpoint, worktree, and metadata.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
@@ -161,6 +170,11 @@
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 #     __WORKTREE__  absolute path to the task worktree
 #     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
+#     __CLAUDESETTINGS__ state-owned host-mode Claude task settings path
+#     __CODEXNOTIFY__ shell-quoted complete Codex notify configuration
+#     __OPENCODECONFIG__ shell-quoted host-mode OpenCode config with one task plugin
+#     __GROKTOKEN__ host-mode Grok per-process task hook token
+#     __KIMITOKEN__ host-mode Kimi per-process task hook token
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
@@ -195,6 +209,8 @@
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
 set -eu
+# Paths, flags, and tokens are literal replacement data; never expand '&' as a matched placeholder.
+shopt -u patsub_replacement 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -236,6 +252,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SUB_HOME_MARKER=".fm-secondmate-home"
+# shellcheck source=bin/fm-host-root-lib.sh
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -260,12 +278,6 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
-# Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
-# a direct report (see bin/fm-gate-refuse-lib.sh).
-fm_refuse_if_gate_agent
-# Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
-# set by the batch loop below), so the guard runs once for the batch, not once per pair.
-[ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
@@ -645,7 +657,36 @@ spawn_remote_secondmate() {
 }
 
 BACKEND=
+HOST_MODE=0
+HOST_ROOT=
+if fm_host_root_enabled; then
+  fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
+  if [ "$KIND" != secondmate ]; then
+    HOST_ROOT=$(fm_host_root_resolve "$FM_ROOT") || exit $?
+    HOST_MODE=1
+  fi
+fi
+
+# Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
+# a direct report (see bin/fm-gate-refuse-lib.sh). Anchor to FM_ROOT because host
+# mode deliberately runs from a different repository.
+fm_refuse_if_gate_agent "$FM_ROOT"
+# Host-root validation above must precede the watcher guard because the guard may
+# repair supervision state. Batch re-execs skip it so the guard runs once per batch.
+[ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
+
+SPAWN_ABORT_CLEANUP=0
+SPAWN_ENDPOINT_CREATED=0
+SPAWN_PRESERVE_WORKTREE=0
 ORCA_ABORT_CLEANUP=0
+SPAWN_CREATE_OUT=
+HERDR_SES=
+HERDR_WORKSPACE_ID=
+HERDR_TAB_ID=
+HERDR_PANE_ID=
+ZELLIJ_SES=
+ZELLIJ_TAB_ID=
+ZELLIJ_PANE_ID=
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
 HERDR_PROJECTION_ABORT_CLEANUP=0
@@ -672,6 +713,8 @@ RELAUNCH_REPLACEMENT_STATE=
 RELAUNCH_REPLACEMENT_WT=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
+CMUX_WORKSPACE_ID=
+CMUX_SURFACE_ID=
 
 parse_orca_worktree_result() {
   local raw=$1 rest
@@ -689,103 +732,6 @@ parse_orca_worktree_result() {
     ORCA_TERMINAL=
   fi
 }
-
-spawn_abort_cleanup() {
-  local status=$?
-  if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] \
-     && [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] \
-     && [ -n "$SPAWN_META_TMP" ] \
-     && [ ! -e "$SPAWN_META_TMP" ] \
-     && [ ! -L "$SPAWN_META_TMP" ]; then
-    RELAUNCH_REPLACEMENT_PENDING=0
-  fi
-  if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ]; then
-    RELAUNCH_REPLACEMENT_PENDING=0
-    if ! clear_relaunch_harness_wiring \
-        "$RELAUNCH_REPLACEMENT_HARNESS" \
-        "$RELAUNCH_REPLACEMENT_WT" \
-        "$RELAUNCH_REPLACEMENT_STATE" \
-        "$ID"; then
-      echo "warning: could not remove replacement wiring after aborted relaunch of $ID" >&2
-    fi
-    if [ -n "$RELAUNCH_REPLACEMENT_BUSY_GEN" ]; then
-      if ! "$FM_ROOT/bin/fm-busy-event.sh" retire \
-          "$RELAUNCH_REPLACEMENT_STATE" "$ID" \
-          --gen "$RELAUNCH_REPLACEMENT_BUSY_GEN"; then
-        echo "warning: could not retire replacement busy generation after aborted relaunch of $ID" >&2
-      fi
-    fi
-  fi
-  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
-     && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
-    if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
-      echo "warning: herdr presentation focus lock unavailable; retaining the projection journal and refusing concurrent abort cleanup" >&2
-      HERDR_PROJECTION_ABORT_CLEANUP=0
-    fi
-  fi
-  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ]; then
-    HERDR_PROJECTION_ABORT_CLEANUP=0
-    fm_backend_herdr_projection_cleanup_exact \
-      "$HERDR_PROJECTION_ABORT_SESSION" \
-      "$HERDR_PROJECTION_ABORT_TASK_PANE" \
-      "$HERDR_PROJECTION_ABORT_SEEDED_PANE" || true
-  fi
-  if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
-    HERDR_PRESENTATION_ORDER_LOCK_HELD=0
-    fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
-  fi
-  if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
-    ORCA_ABORT_CLEANUP=0
-    if [ -n "${ORCA_TERMINAL:-}" ]; then
-      fm_backend_kill orca "$ORCA_TERMINAL" 2>/dev/null || true
-    fi
-    if [ -n "${ORCA_WORKTREE_ID:-}" ]; then
-      if ! fm_backend_remove_worktree orca "$ORCA_WORKTREE_ID" 2>/dev/null; then
-        mkdir -p "$STATE" 2>/dev/null || true
-        if [ -d "$STATE" ]; then
-          {
-            echo "window=$W"
-            echo "worktree=${WT:-}"
-            echo "project=$PROJ_ABS"
-            echo "harness=$HARNESS"
-            echo "kind=$KIND"
-            [ -z "${MODE:-}" ] || echo "mode=$MODE"
-            [ -z "${YOLO:-}" ] || echo "yolo=$YOLO"
-            echo "tasktmp=${TASK_TMP:-}"
-            echo "model=${MODEL:-default}"
-            echo "effort=${EFFORT:-default}"
-            echo "backend=orca"
-            echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-            [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
-          } > "$STATE/$ID.meta" 2>/dev/null || true
-        fi
-      fi
-    fi
-  fi
-  if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
-    SPAWN_TASK_LOCK_HELD=0
-    fm_lock_release "$SPAWN_TASK_LOCK" || true
-  fi
-  if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
-    SPAWN_META_LOCK_HELD=0
-    fm_lock_release "$SPAWN_META_LOCK" || true
-  fi
-  if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
-    SPAWN_TASK_SET_LOCK_HELD=0
-    fm_lock_release "$SPAWN_TASK_SET_LOCK" || true
-  fi
-  if [ "$SPAWN_CONTROL_LOCK_HELD" = 1 ]; then
-    SPAWN_CONTROL_LOCK_HELD=0
-    fm_lock_release "$SPAWN_CONTROL_LOCK" || true
-  fi
-  [ -z "$SPAWN_META_TMP" ] || rm -f "$SPAWN_META_TMP" 2>/dev/null || true
-  if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
-    CONFIG_INHERIT_LOCK_HELD=0
-    fm_lock_release "$CONFIG_INHERIT_LOCK" || true
-  fi
-  return "$status"
-}
-trap spawn_abort_cleanup EXIT
 
 # One bounded lock per live Herdr session/socket, shared across all homes.
 # <session> is required so secondmate and primary spawns serialize against the
@@ -838,6 +784,199 @@ spawn_herdr_presentation_order_lock_release() {
   [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ] || return 0
   HERDR_PRESENTATION_ORDER_LOCK_HELD=0
   fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+}
+write_abort_meta() {
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  {
+    echo "window=${T:-${W:-fm-$ID}}"
+    echo "worktree=${WT:-}"
+    [ "${HOST_MODE:-0}" -eq 0 ] || echo "host_root=$HOST_ROOT"
+    echo "project=${PROJ_ABS:-}"
+    echo "harness=${HARNESS:-unknown}"
+    echo "kind=$KIND"
+    echo "mode=${MODE:-no-mistakes}"
+    echo "yolo=${YOLO:-off}"
+    echo "tasktmp=${TASK_TMP:-}"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+    [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+    [ -z "${HERDR_SES:-}" ] || echo "herdr_session=$HERDR_SES"
+    [ -z "${HERDR_WORKSPACE_ID:-}" ] || echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
+    [ -z "${HERDR_TAB_ID:-}" ] || echo "herdr_tab_id=$HERDR_TAB_ID"
+    [ -z "${HERDR_PANE_ID:-}" ] || echo "herdr_pane_id=$HERDR_PANE_ID"
+    [ -z "${ZELLIJ_SES:-}" ] || echo "zellij_session=$ZELLIJ_SES"
+    [ -z "${ZELLIJ_TAB_ID:-}" ] || echo "zellij_tab_id=$ZELLIJ_TAB_ID"
+    [ -z "${ZELLIJ_PANE_ID:-}" ] || echo "zellij_pane_id=$ZELLIJ_PANE_ID"
+    [ -z "${ORCA_WORKTREE_ID:-}" ] || echo "orca_worktree_id=$ORCA_WORKTREE_ID"
+    [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
+    [ -z "${CMUX_WORKSPACE_ID:-}" ] || echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
+    [ -z "${CMUX_SURFACE_ID:-}" ] || echo "cmux_surface_id=$CMUX_SURFACE_ID"
+  } > "$STATE/$ID.meta" 2>/dev/null || true
+}
+
+remove_spawn_artifacts() {
+  [ -z "${auth_file:-}" ] || rm -f -- "$auth_file"
+  [ -z "${SPAWN_CREATE_OUT:-}" ] || rm -f -- "$SPAWN_CREATE_OUT"
+  if [ "$KIND" != secondmate ] && [ -n "${WT:-}" ] && [ -d "${WT:-}" ]; then
+    rm -f -- "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.opencode/plugins/fm-busy-state.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  rm -f -- "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
+    "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token" \
+    "$STATE/$ID.claude-settings.json" "$STATE/$ID.opencode-turn-end.js" \
+    "$STATE/$ID.muse-session" "$STATE/$ID.muse-session-current" \
+    "$STATE/$ID.cursor-session" "$STATE/$ID.control-relaunch" \
+    "$STATE/$ID.control-relaunch.meta-prior" "$STATE/$ID.control-relaunch.brief-prior" \
+    "$STATE/$ID.control-relaunch.note"
+  [ -z "${TASK_TMP:-}" ] || rm -rf -- "$TASK_TMP"
+}
+
+spawn_abort_cleanup() {
+  local status=$? cleanup_failed=0 endpoint_stopped=1
+  if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] \
+     && [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] \
+     && [ -n "$SPAWN_META_TMP" ] \
+     && [ ! -e "$SPAWN_META_TMP" ] \
+     && [ ! -L "$SPAWN_META_TMP" ]; then
+    RELAUNCH_REPLACEMENT_PENDING=0
+  fi
+  if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ]; then
+    RELAUNCH_REPLACEMENT_PENDING=0
+    if ! clear_relaunch_harness_wiring \
+        "$RELAUNCH_REPLACEMENT_HARNESS" \
+        "$RELAUNCH_REPLACEMENT_WT" \
+        "$RELAUNCH_REPLACEMENT_STATE" \
+        "$ID"; then
+      echo "warning: could not remove replacement wiring after aborted relaunch of $ID" >&2
+    fi
+    if [ -n "$RELAUNCH_REPLACEMENT_BUSY_GEN" ]; then
+      if ! "$FM_ROOT/bin/fm-busy-event.sh" retire \
+          "$RELAUNCH_REPLACEMENT_STATE" "$ID" \
+          --gen "$RELAUNCH_REPLACEMENT_BUSY_GEN"; then
+        echo "warning: could not retire replacement busy generation after aborted relaunch of $ID" >&2
+      fi
+    fi
+  fi
+  if [ "$ORCA_ABORT_CLEANUP" != 1 ] \
+     && [ "$SPAWN_ABORT_CLEANUP" != 1 ] \
+     && [ "$HERDR_PROJECTION_ABORT_CLEANUP" != 1 ]; then
+    spawn_herdr_presentation_order_lock_release
+    if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
+      SPAWN_TASK_LOCK_HELD=0
+      fm_lock_release "$SPAWN_TASK_LOCK" || true
+    fi
+    if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
+      SPAWN_META_LOCK_HELD=0
+      fm_lock_release "$SPAWN_META_LOCK" || true
+    fi
+    if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+      SPAWN_TASK_SET_LOCK_HELD=0
+      fm_lock_release "$SPAWN_TASK_SET_LOCK" || true
+    fi
+    if [ "$SPAWN_CONTROL_LOCK_HELD" = 1 ]; then
+      SPAWN_CONTROL_LOCK_HELD=0
+      fm_lock_release "$SPAWN_CONTROL_LOCK" || true
+    fi
+    [ -z "$SPAWN_META_TMP" ] || rm -f "$SPAWN_META_TMP" 2>/dev/null || true
+    if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
+      CONFIG_INHERIT_LOCK_HELD=0
+      fm_lock_release "$CONFIG_INHERIT_LOCK" || true
+    fi
+    return "$status"
+  fi
+  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
+     && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ] \
+     && ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
+    echo "warning: herdr presentation focus lock unavailable; retaining the projection journal and refusing concurrent abort cleanup" >&2
+    cleanup_failed=1
+  fi
+  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
+     && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
+    HERDR_PROJECTION_ABORT_CLEANUP=0
+    fm_backend_herdr_projection_cleanup_exact \
+      "$HERDR_PROJECTION_ABORT_SESSION" \
+      "$HERDR_PROJECTION_ABORT_TASK_PANE" \
+      "$HERDR_PROJECTION_ABORT_SEEDED_PANE" || cleanup_failed=1
+  fi
+  if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
+    ORCA_ABORT_CLEANUP=0
+    if [ -n "${ORCA_TERMINAL:-}" ] && ! fm_backend_stop_and_verify orca "$ORCA_TERMINAL"; then
+      cleanup_failed=1
+      endpoint_stopped=0
+    fi
+    if [ "$endpoint_stopped" -eq 1 ] && [ -n "${ORCA_WORKTREE_ID:-}" ]; then
+      if [ "$SPAWN_PRESERVE_WORKTREE" = 1 ]; then
+        cleanup_failed=1
+      else
+        fm_backend_remove_worktree orca "$ORCA_WORKTREE_ID" 2>/dev/null || cleanup_failed=1
+      fi
+    fi
+  elif [ "$SPAWN_ABORT_CLEANUP" = 1 ]; then
+    SPAWN_ABORT_CLEANUP=0
+    if [ "$SPAWN_ENDPOINT_CREATED" = 1 ] && [ -z "${T:-}" ]; then
+      # The adapter confirmed creation but could not recover an addressable
+      # endpoint id. Preserve partial ids/labels for manual recovery; never
+      # recycle a worktree while endpoint absence is unknown.
+      cleanup_failed=1
+      endpoint_stopped=0
+    elif [ -n "${T:-}" ] && ! fm_backend_stop_and_verify "$BACKEND" "$T" "${ZELLIJ_TAB_ID:-}" "${W:-fm-$ID}"; then
+      cleanup_failed=1
+      endpoint_stopped=0
+    fi
+    if [ "$endpoint_stopped" -eq 1 ] && [ "$KIND" != secondmate ] && [ -n "${WT:-}" ] && [ -d "${WT:-}" ]; then
+      if [ "$SPAWN_PRESERVE_WORKTREE" = 1 ]; then
+        cleanup_failed=1
+      else
+        (cd "$PROJ_ABS" && treehouse return --force "$WT") >/dev/null 2>&1 || cleanup_failed=1
+      fi
+    fi
+  fi
+  if [ "$cleanup_failed" -ne 0 ]; then
+    write_abort_meta
+    echo "error: spawn cleanup was incomplete; recoverable task metadata remains at $STATE/$ID.meta" >&2
+  else
+    remove_spawn_artifacts
+  fi
+  spawn_herdr_presentation_order_lock_release
+  if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
+    SPAWN_TASK_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TASK_LOCK" || true
+  fi
+  if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
+    SPAWN_META_LOCK_HELD=0
+    fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+    SPAWN_TASK_SET_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TASK_SET_LOCK" || true
+  fi
+  if [ "$SPAWN_CONTROL_LOCK_HELD" = 1 ]; then
+    SPAWN_CONTROL_LOCK_HELD=0
+    fm_lock_release "$SPAWN_CONTROL_LOCK" || true
+  fi
+  [ -z "$SPAWN_META_TMP" ] || rm -f "$SPAWN_META_TMP" 2>/dev/null || true
+  if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
+    CONFIG_INHERIT_LOCK_HELD=0
+    fm_lock_release "$CONFIG_INHERIT_LOCK" || true
+  fi
+  return "$status"
+}
+trap spawn_abort_cleanup EXIT
+
+capture_backend_create() {  # <output-var> <adapter-function> [args...]
+  local output_var=$1 status
+  shift
+  SPAWN_CREATE_OUT=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-create.XXXXXX") || return 1
+  if "$@" > "$SPAWN_CREATE_OUT"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf -v "$output_var" '%s' "$(cat "$SPAWN_CREATE_OUT")"
+  rm -f -- "$SPAWN_CREATE_OUT"
+  SPAWN_CREATE_OUT=
+  return "$status"
 }
 
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
@@ -1111,15 +1250,27 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    claude)
+      if [ "$HOST_MODE" -eq 1 ] && [ "$kind" != secondmate ]; then
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --settings __CLAUDESETTINGS__ --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c __CODEXNOTIFY__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    opencode)
+      if [ "$HOST_MODE" -eq 1 ] && [ "$kind" != secondmate ]; then
+        printf '%s' 'OPENCODE_CONFIG_CONTENT=__OPENCODECONFIG__ opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     pi|pi-signed)
       printf '%s' '__PIBIN____PITUIMODE__'
       if [ "$kind" = secondmate ]; then
@@ -1133,9 +1284,16 @@ launch_template() {
     # crewmate runs fully autonomously, no permission gate), which an unattended
     # crewmate needs; it is the targeted equivalent of claude's
     # --dangerously-skip-permissions. grok's turn-end signal does NOT ride the
-    # launch command - it is a Stop-event hook installed below (global hook +
-    # per-task pointer), so the template is identical for ship/scout/secondmate.
-    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # launch command in default mode - it is a Stop-event hook installed below
+    # (global hook + per-task pointer). Host-root mode instead binds the process
+    # to its task token because the endpoint cwd is the authoritative host root.
+    grok)
+      if [ "$HOST_MODE" -eq 1 ] && [ "$kind" != secondmate ]; then
+        printf '%s' 'FM_GROK_TURNEND_TOKEN=__GROKTOKEN__ grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      else
+        printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      fi
+      ;;
     # Cursor Agent CLI. --trust suppresses the workspace-trust prompt, which
     # --yolo does NOT cover and which would otherwise block every spawn, since
     # each task gets a fresh worktree path cursor has never seen. --yolo is the
@@ -1151,9 +1309,16 @@ launch_template() {
     cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
-    # Its turn-end signal is a globally configured Stop hook plus a guarded
-    # per-task worktree token, so no launch placeholder belongs here.
-    kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
+    # Its default turn-end signal is a globally configured Stop hook plus a
+    # guarded per-task worktree token. Host-root mode binds the process token
+    # explicitly because the endpoint does not run from the target worktree.
+    kimi)
+      if [ "$HOST_MODE" -eq 1 ] && [ "$kind" != secondmate ]; then
+        printf '%s' 'FM_KIMI_TURNEND_TOKEN=__KIMITOKEN__ __KIMIBIN__ __MODELFLAG__--auto'
+      else
+        printf '%s' '__KIMIBIN__ __MODELFLAG__--auto'
+      fi
+      ;;
     # muse (Muse Code): a positional prompt starts the supervised interactive
     # session. --yolo is the single flag that makes a crewmate pane viable: muse
     # ships approval prompts AND a filesystem/network sandbox ON by default
@@ -1182,6 +1347,10 @@ launch_template() {
 
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
+    if [ "$HOST_MODE" -eq 1 ]; then
+      echo "error: host-root mode requires a named verified harness so its task completion safeguard cannot be bypassed" >&2
+      exit 2
+    fi
     LAUNCH=$ARG3
     HARNESS=""
     for word in $LAUNCH; do
@@ -1679,6 +1848,10 @@ fi
 
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
+if [ "$HOST_MODE" -eq 1 ] && ! grep -qxF '<!-- firstmate-execution-mode: host-root -->' "$BRIEF"; then
+  echo "error: host-root mode requires a host-root brief; regenerate $BRIEF with FM_HOST_ROOT set" >&2
+  exit 1
+fi
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
@@ -1709,6 +1882,15 @@ real_path_or_raw() {  # <path>
 # herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
+spawn_path_is_isolated_worktree() {  # <candidate-path>
+  local candidate=$1 candidate_real top top_real
+  [ -n "$candidate" ] || return 1
+  candidate_real=$(cd "$candidate" 2>/dev/null && pwd -P) || return 1
+  top=$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true)
+  top_real=$(cd "$top" 2>/dev/null && pwd -P) || return 1
+  [ "$candidate_real" = "$top_real" ] && [ "$candidate_real" != "$PROJ_ABS_REAL" ]
+}
+
 validate_spawn_worktree() {  # <source> <inspect-target>
   local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
   wt_real=
@@ -1725,6 +1907,32 @@ validate_spawn_worktree() {  # <source> <inspect-target>
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
+  if [ "$HOST_MODE" -eq 1 ] && fm_host_root_paths_overlap "$HOST_ROOT" "$wt_real"; then
+    SPAWN_PRESERVE_WORKTREE=1
+    echo "error: $source resolved overlapping host and target roots (host '$HOST_ROOT'; target '$wt_real'); stopping the endpoint but preserving the path for manual recovery" >&2
+    exit 1
+  fi
+}
+
+arm_created_endpoint_rollback() {
+  [ "${FM_BACKEND_CREATE_OCCURRED:-0}" = 1 ] || return 0
+  SPAWN_ENDPOINT_CREATED=1
+  case "$BACKEND" in
+    herdr)
+      HERDR_TAB_ID=${FM_BACKEND_CREATED_HERDR_TAB_ID:-}
+      HERDR_PANE_ID=${FM_BACKEND_CREATED_HERDR_PANE_ID:-}
+      ;;
+    zellij)
+      ZELLIJ_TAB_ID=${FM_BACKEND_CREATED_ZELLIJ_TAB_ID:-}
+      ZELLIJ_PANE_ID=${FM_BACKEND_CREATED_ZELLIJ_PANE_ID:-}
+      ;;
+    cmux)
+      CMUX_WORKSPACE_ID=${FM_BACKEND_CREATED_CMUX_WORKSPACE_ID:-}
+      CMUX_SURFACE_ID=${FM_BACKEND_CREATED_CMUX_SURFACE_ID:-}
+      ;;
+  esac
+  T=${FM_BACKEND_CREATED_TARGET:-}
+  SPAWN_ABORT_CLEANUP=1
 }
 
 freshen_spawn_worktree_base() {  # <worktree>
@@ -2027,7 +2235,11 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      if ! FM_HOME="$HERDR_LABEL_HOME" capture_backend_create HERDR_TASK_IDS \
+        fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID"; then
+        arm_created_endpoint_rollback
+        exit 1
+      fi
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -2040,7 +2252,10 @@ EOF
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
-    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$PROJ_ABS") || exit 1
+    if ! capture_backend_create ZELLIJ_TASK_IDS fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$PROJ_ABS"; then
+      arm_created_endpoint_rollback
+      exit 1
+    fi
     read -r ZELLIJ_TAB_ID ZELLIJ_PANE_ID <<EOF
 $ZELLIJ_TASK_IDS
 EOF
@@ -2052,7 +2267,10 @@ EOF
     ;;
   cmux)
     fm_backend_cmux_container_ensure || exit 1
-    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
+    if ! capture_backend_create CMUX_TASK_IDS fm_backend_cmux_create_task "$W" "$PROJ_ABS"; then
+      arm_created_endpoint_rollback
+      exit 1
+    fi
     read -r CMUX_WORKSPACE_ID CMUX_SURFACE_ID <<EOF
 $CMUX_TASK_IDS
 EOF
@@ -2069,9 +2287,8 @@ EOF
     set -e
     if [ "$ORCA_WT_STATUS" -ne 0 ]; then
       if [ "$ORCA_WT_STATUS" -eq 2 ] && [ -n "$ORCA_WT_RAW" ]; then
-        if parse_orca_worktree_result "$ORCA_WT_RAW" && [ -n "$ORCA_WORKTREE_ID" ]; then
-          ORCA_ABORT_CLEANUP=1
-        fi
+        parse_orca_worktree_result "$ORCA_WT_RAW" || true
+        [ -z "$ORCA_WORKTREE_ID" ] || ORCA_ABORT_CLEANUP=1
       fi
       exit 1
     fi
@@ -2094,6 +2311,15 @@ if [ "$KIND" = secondmate ]; then
     propagate_inheritable_config "$CONFIG" "$PROJ_ABS/config" \
     || echo "warning: secondmate $ID trace-context inheritance failed for $PROJ_ABS" >&2
 fi
+# Arm generic rollback only after this invocation demonstrably created its
+# endpoint. Adapter create functions expose partial post-create state so a
+# verification failure cannot leave an unrecorded live endpoint; a duplicate
+# preflight failure leaves FM_BACKEND_CREATE_OCCURRED=0 and owns nothing. A
+# relaunch reuses its endpoint and must never arm fresh-endpoint rollback.
+if [ "$RELAUNCH" -eq 0 ] && [ "$BACKEND" != orca ]; then
+  SPAWN_ENDPOINT_CREATED=1
+  SPAWN_ABORT_CLEANUP=1
+fi
 # #134 robustness: only tmux needs a worktree-detection target distinct from $T -
 # its rename-safe stable window id, set as WT_TARGET=$WID in the tmux branch above.
 # Every other backend addresses its pane/surface by the id already in $T, so default
@@ -2114,6 +2340,7 @@ spawn_current_path() {  # <target>
     tmux) fm_backend_tmux_current_path "$1" ;;
     herdr) fm_backend_herdr_current_path "$1" ;;
     zellij) fm_backend_zellij_current_path "$1" "$W" ;;
+    orca) fm_backend_orca_current_path "$1" ;;
     cmux) fm_backend_cmux_current_path "$1" "$W" ;;
   esac
 }
@@ -2234,27 +2461,26 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # a mismatch just becomes the new candidate rather than resetting the wait, so a
   # pane that is already settled by the first real read only costs the one existing
   # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  WORKTREE_CWD_ATTEMPTS=${FM_WORKTREE_CWD_ATTEMPTS:-60}
+  WORKTREE_CWD_DELAY=${FM_WORKTREE_CWD_DELAY:-1}
+  case "$WORKTREE_CWD_ATTEMPTS" in ''|*[!0-9]*|0) WORKTREE_CWD_ATTEMPTS=60 ;; esac
   candidate=""
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "$WORKTREE_CWD_ATTEMPTS"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
-    if [ -n "$p" ]; then
+    if spawn_path_is_isolated_worktree "$p"; then
       p_real=$(real_path_or_raw "$p")
-      if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
-        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
-          WT="$p"
-          break
-        fi
-        candidate="$p_real"
-      else
-        candidate=""
+      if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+        WT="$p"
+        break
       fi
+      candidate="$p_real"
     else
       candidate=""
     fi
-    sleep 1
+    sleep "$WORKTREE_CWD_DELAY"
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: treehouse get did not yield an isolated worktree within $WORKTREE_CWD_ATTEMPTS probes (last cwd '${p:-none}'); inspect window $T" >&2
     exit 1
   fi
 
@@ -2262,6 +2488,23 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
+fi
+
+if [ "$HOST_MODE" -eq 1 ]; then
+  HOST_CWD_ATTEMPTS=${FM_HOST_CWD_ATTEMPTS:-30}
+  HOST_CWD_DELAY=${FM_HOST_CWD_DELAY:-1}
+  case "$HOST_CWD_ATTEMPTS" in ''|*[!0-9]*|0) HOST_CWD_ATTEMPTS=30 ;; esac
+  spawn_send_text_line "$T" "cd -- $(shell_quote "$HOST_ROOT")"
+  for _ in $(seq 1 "$HOST_CWD_ATTEMPTS"); do
+    p=$(spawn_current_path "$T" || true)
+    [ "$(real_path_or_raw "$p")" = "$HOST_ROOT" ] && break
+    p=
+    sleep "$HOST_CWD_DELAY"
+  done
+  if [ -z "${p:-}" ] || [ "$(real_path_or_raw "$p")" != "$HOST_ROOT" ]; then
+    echo "error: backend endpoint did not enter FM_HOST_ROOT $HOST_ROOT; inspect target $T" >&2
+    exit 1
+  fi
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
@@ -2301,6 +2544,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_STATE=$STATE_REAL
   RELAUNCH_REPLACEMENT_WT=$WT
 fi
+GROK_TASK_TOKEN=
+KIMI_TASK_TOKEN=
 if [ "$KIND" != secondmate ]; then
   # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
   # adapter with a verified semantic source. The launch brief sent below IS a
@@ -2355,14 +2600,27 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
-      cat > "$WT/.claude/settings.local.json" <<EOF
+      if [ "$HOST_MODE" -eq 1 ]; then
+        CLAUDE_TASK_SETTINGS="$STATE/$ID.claude-settings.json"
+      else
+        mkdir -p "$WT/.claude"
+        CLAUDE_TASK_SETTINGS="$WT/.claude/settings.local.json"
+      fi
+      cat > "$CLAUDE_TASK_SETTINGS" <<EOF
 {"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
-      exclude_path '.claude/settings.local.json'
+      if [ "$HOST_MODE" -eq 0 ]; then
+        exclude_path '.claude/settings.local.json'
+      fi
       ;;
     opencode*)
-      mkdir -p "$WT/.opencode/plugins"
-      cat > "$WT/.opencode/plugins/fm-busy-state.js" <<EOF
+      if [ "$HOST_MODE" -eq 1 ]; then
+        OPENCODE_TASK_PLUGIN="$STATE/$ID.opencode-turn-end.js"
+      else
+        mkdir -p "$WT/.opencode/plugins"
+        OPENCODE_TASK_PLUGIN="$WT/.opencode/plugins/fm-busy-state.js"
+      fi
+      cat > "$OPENCODE_TASK_PLUGIN" <<EOF
 // Firstmate semantic busy-state events + turn-end notification; written by
 // fm-spawn under the contract owned by bin/fm-busy-lib.sh.
 // Semantic state comes from OpenCode's session.status events: busy and retry
@@ -2411,7 +2669,9 @@ export const FmBusyState = async () => {
   };
 };
 EOF
-      exclude_path '.opencode/plugins/fm-busy-state.js'
+      if [ "$HOST_MODE" -eq 0 ]; then
+        exclude_path '.opencode/plugins/fm-busy-state.js'
+      fi
       ;;
     pi|pi-signed)
       # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
@@ -2485,13 +2745,16 @@ EOF
 #!/usr/bin/env bash
 set -u
 auth_dir=$sq_grok_auth_dir
-workspace=\${GROK_WORKSPACE_ROOT:-}
-[ -n "\$workspace" ] || exit 0
-p="\$workspace/.fm-grok-turnend"
-[ -f "\$p" ] || exit 0
-first=
-IFS= read -r -n 256 first < "\$p" 2>/dev/null || [ -n "\$first" ] || exit 0
-case "\$first" in token=*) token=\${first#token=} ;; *) exit 0 ;; esac
+token=\${FM_GROK_TURNEND_TOKEN:-}
+if [ -z "\$token" ]; then
+  workspace=\${GROK_WORKSPACE_ROOT:-}
+  [ -n "\$workspace" ] || exit 0
+  p="\$workspace/.fm-grok-turnend"
+  [ -f "\$p" ] || exit 0
+  first=
+  IFS= read -r -n 256 first < "\$p" 2>/dev/null || [ -n "\$first" ] || exit 0
+  case "\$first" in token=*) token=\${first#token=} ;; *) exit 0 ;; esac
+fi
 case "\$token" in fm.????????????) : ;; *) exit 0 ;; esac
 case "\$token" in *[!A-Za-z0-9._-]*) exit 0 ;; esac
 t=\$(cat "\$auth_dir/\$token" 2>/dev/null) || exit 0
@@ -2502,8 +2765,11 @@ EOF
       chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
-      exclude_path '.fm-grok-turnend'
+      GROK_TASK_TOKEN=${auth_file##*/}
+      if [ "$HOST_MODE" -eq 0 ]; then
+        printf 'token=%s\n' "$GROK_TASK_TOKEN" > "$WT/.fm-grok-turnend"
+        exclude_path '.fm-grok-turnend'
+      fi
       ;;
     muse*)
       # muse's turn lifecycle is neither a hook nor a launch flag: its plugin
@@ -2568,8 +2834,11 @@ EOF
       umask "$old_umask"
       printf '%s\n' "$TURNEND" > "$auth_file"
       printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
-      exclude_path '.fm-kimi-turnend'
+      KIMI_TASK_TOKEN=${auth_file##*/}
+      if [ "$HOST_MODE" -eq 0 ]; then
+        printf 'token=%s\n' "$KIMI_TASK_TOKEN" > "$WT/.fm-kimi-turnend"
+        exclude_path '.fm-kimi-turnend'
+      fi
       ;;
   esac
 fi
@@ -2632,7 +2901,7 @@ fi
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree host_root project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -2642,6 +2911,7 @@ preserve_relaunch_meta() {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
+  [ "$HOST_MODE" -eq 0 ] || echo "host_root=$HOST_ROOT"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
   echo "kind=$KIND"
@@ -2712,6 +2982,16 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
+sq_claude_settings=$(shell_quote "$STATE/$ID.claude-settings.json")
+sq_codex_notify=$(shell_quote "notify=[\"bash\",\"-c\",\"touch -- $sq_turnend\"]")
+sq_opencode_config=
+if [ "$HOST_MODE" -eq 1 ] && [ "$HARNESS" = opencode ]; then
+  opencode_plugin_url=$(node -e 'process.stdout.write(require("node:url").pathToFileURL(process.argv[1]).href)' \
+    "$OPENCODE_TASK_PLUGIN")
+  opencode_config=$(printf '{"permission":{"*":"allow"},"plugin":["%s"]}' \
+    "$(json_escape "$opencode_plugin_url")")
+  sq_opencode_config=$(shell_quote "$opencode_config")
+fi
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
@@ -2727,6 +3007,11 @@ case "$HARNESS" in
   cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
+LAUNCH=${LAUNCH//__CLAUDESETTINGS__/$sq_claude_settings}
+LAUNCH=${LAUNCH//__CODEXNOTIFY__/$sq_codex_notify}
+LAUNCH=${LAUNCH//__OPENCODECONFIG__/$sq_opencode_config}
+LAUNCH=${LAUNCH//__GROKTOKEN__/$GROK_TASK_TOKEN}
+LAUNCH=${LAUNCH//__KIMITOKEN__/$KIMI_TASK_TOKEN}
 case "$HARNESS" in
   claude|codex|opencode|pi|pi-signed|grok|kimi|muse)
     LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS $LAUNCH"
@@ -2759,7 +3044,13 @@ if [ "$KIND" = secondmate ]; then
   # not enable them across the launch boundary (bin/fm-trace-context-lib.sh header).
   # Reuse the single frozen decision from the carrier resolution above so the
   # injected carrier and this on/off snapshot are guaranteed to agree.
-  LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
+  secondmate_root_clear=
+  if [ "${FM_HOST_ROOT+x}" = x ] || [ "${FM_TARGET_WORKTREE+x}" = x ]; then
+    secondmate_root_clear='FM_HOST_ROOT= FM_TARGET_WORKTREE= '
+  fi
+  LAUNCH="${secondmate_root_clear}FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
+elif [ "$HOST_MODE" -eq 1 ]; then
+  LAUNCH="FM_ROOT_OVERRIDE=$(shell_quote "$FM_ROOT") FM_HOME=$(shell_quote "$FM_HOME") FM_HOST_ROOT=$(shell_quote "$HOST_ROOT") FM_TARGET_WORKTREE=$(shell_quote "$WT") $LAUNCH"
 fi
 if [ -z "$SPAWN_TRACEPARENT" ] && [ "$RELAUNCH" -eq 1 ]; then
   LAUNCH="unset TRACEPARENT; $LAUNCH"
@@ -2812,7 +3103,14 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   HERDR_PROJECTION_ABORT_CLEANUP=0
   spawn_herdr_presentation_order_lock_release
 fi
-spawn_send_key "$T" Enter
+# Enter may reach the shell even when the backend reports an error.
+# Keep the recorded endpoint and worktree instead of risking cleanup after execution began.
+ORCA_ABORT_CLEANUP=0
+SPAWN_ABORT_CLEANUP=0
+if ! spawn_send_key "$T" Enter; then
+  echo "error: launch submission could not be confirmed; endpoint and task metadata were retained for recovery" >&2
+  exit 1
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"
