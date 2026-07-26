@@ -1017,12 +1017,17 @@ cleanup_firstmate_home_children() {
     fi
     if [ -n "$child_t" ]; then
       case "$child_backend" in
-        zellij|cmux)
-          # These adapters scope labels and optional socket configuration to the owning home.
+        zellij)
+          # Zellij titles are scoped by the owning home tag, so forced secondmate
+          # cleanup must verify child tabs as that child home, not the parent.
+          ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) 2>/dev/null || true
+          ;;
+        cmux)
+          # Cmux labels and socket configuration are scoped to the owning home.
           ( unset FM_ROOT_OVERRIDE FM_CONFIG_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) || return 1
           ;;
         *)
-          fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" || return 1
+          fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
           ;;
       esac
     fi
