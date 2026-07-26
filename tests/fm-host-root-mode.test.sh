@@ -536,9 +536,13 @@ SH
   out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
   expect_code 0 "$status" "fm-promote rejected a recorded host-root scout"
   assert_contains "$out" "'$ROOT/bin/fm-send.sh'" "host-root promotion did not print a quoted absolute fm-send path"
+  # shellcheck disable=SC2016  # Assertions intentionally match literal worker variables.
   assert_contains "$out" 'git -C "$FM_TARGET_WORKTREE" status' "host-root promotion did not scope scratch status"
+  # shellcheck disable=SC2016
   assert_contains "$out" 'git -C "$FM_TARGET_WORKTREE" log' "host-root promotion did not scope scratch history"
+  # shellcheck disable=SC2016
   assert_contains "$out" 'git -C "$FM_TARGET_WORKTREE" checkout -b fm/scout' "host-root promotion did not scope branch creation"
+  # shellcheck disable=SC2016
   assert_contains "$out" '(cd "$FM_TARGET_WORKTREE" && ...)' "host-root promotion did not scope validation commands"
   printf 'window=fake:fm-plain\nworktree=/tmp/plain\nproject=/tmp/project\nkind=scout\n' > "$home/state/plain.meta"
   status=0
