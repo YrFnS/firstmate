@@ -15,6 +15,7 @@
 # is idempotent. A different decision key creates a different backlog identity.
 # All backlog mutations run in the active FM_HOME, which keeps main-home and
 # secondmate-home ownership aligned with the work that discovered the decision.
+# Host-root origins bind to their recorded physical host cwd before task or backlog activity.
 #
 # Usage:
 #   fm-decision-hold.sh id <origin-id> <decision-key>
@@ -51,6 +52,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-host-root-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
 
 usage() {
   awk '
@@ -78,6 +82,15 @@ validate_one_line() {  # <label> <value>
   case "$value" in
     *$'\n'*|*$'\r'*) fail "$label must be one line" ;;
   esac
+}
+
+assert_origin_host() {  # <origin-id>
+  local origin=$1 meta="$STATE/$1.meta"
+  if [ -f "$meta" ]; then
+    fm_host_root_assert_task_cwd "$FM_ROOT" "$meta"
+  else
+    fm_host_root_assert_session_cwd "$FM_ROOT"
+  fi
 }
 
 sha256_text() {  # <text>
@@ -243,6 +256,7 @@ command_hold() {
   done
   validate_slug origin-id "$origin"
   validate_slug decision-key "$key"
+  assert_origin_host "$origin" || exit $?
   validate_one_line title "$title"
   validate_one_line reason "$reason"
   case "$reason" in *'('*|*')'*) fail "reason must not contain parentheses (tasks-axi hold contract)" ;; esac
@@ -281,6 +295,7 @@ command_complete() {
   shift
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] && has_meta=1
+  assert_origin_host "$origin" || exit $?
   require_tasks_axi
   origin_exists_here "$origin" || fail "origin $origin is not owned by the active home $FM_HOME"
   if [ "$#" -eq 1 ] && [ "$1" = --none ]; then
@@ -343,6 +358,7 @@ command_verify() {
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] || fail "origin metadata is absent: $meta"
+  assert_origin_host "$origin" || exit $?
   require_tasks_axi
   reviewed=$(meta_value "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed unresolved-decision inventory"
@@ -381,6 +397,7 @@ command_resolve() {
   done
   validate_slug origin-id "$origin"
   validate_slug decision-key "$key"
+  assert_origin_host "$origin" || exit $?
   [ -n "$decision_file" ] || fail "--decision-file is required"
   [ -f "$decision_file" ] || fail "decision file does not exist: $decision_file"
   decision=$(cat "$decision_file")

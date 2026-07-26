@@ -1751,8 +1751,14 @@ fm_backend_herdr_agent_alive() {  # <target>
 # the safety argument). An ADOPTED workspace's caller always passes an empty
 # 4th arg, so this function never even queries for a prune candidate in that
 # case. Echoes "<tab_id> <pane_id>" on success.
+# Creation-state globals are consumed by fm-spawn after direct function calls.
+# shellcheck disable=SC2034
 fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_tab_id>
   local container=$1 label=$2 cwd=$3 seeded_tab_id=${4:-} session wsid list dup_tabs dup dup_pane dup_tab_ids out tab_id pane_id remaining_dup_tabs
+  FM_BACKEND_CREATE_OCCURRED=0
+  FM_BACKEND_CREATED_TARGET=
+  FM_BACKEND_CREATED_HERDR_TAB_ID=
+  FM_BACKEND_CREATED_HERDR_PANE_ID=
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
@@ -1775,8 +1781,12 @@ $dup_tabs
 EOF
   fi
   out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  FM_BACKEND_CREATE_OCCURRED=1
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  FM_BACKEND_CREATED_HERDR_TAB_ID=$tab_id
+  FM_BACKEND_CREATED_HERDR_PANE_ID=$pane_id
+  [ -z "$pane_id" ] || FM_BACKEND_CREATED_TARGET="$session:$pane_id"
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
     echo "error: could not parse tab/pane id from herdr tab create output" >&2
     return 1
@@ -2710,6 +2720,22 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done
+}
+
+# Tri-state endpoint probe for destructive cleanup. Only Herdr's typed
+# pane_not_found response proves absence; malformed, unreachable, or other
+# error responses stay unknown.
+fm_backend_herdr_target_state() {  # <target> -> present|absent|unknown
+  local out code pane_id
+  fm_backend_herdr_parse_target "$1" || { printf 'unknown'; return 0; }
+  out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>&1)
+  code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  if [ -n "$code" ]; then
+    [ "$code" = pane_not_found ] && printf 'absent' || printf 'unknown'
+    return 0
+  fi
+  pane_id=$(printf '%s' "$out" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)
+  [ "$pane_id" = "$FM_BACKEND_HERDR_PANE" ] && printf 'present' || printf 'unknown'
 }
 
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors
