@@ -626,6 +626,18 @@ meta_value() {
   fm_meta_get "$meta" "$key"
 }
 
+if [ "$TASK_HOST_MODE" -eq 1 ]; then
+  RECORDED_HOST_ROOT=$(meta_value "$META" host_root)
+  RECORDED_TARGET_ROOT=$WT
+  if [ -d "$WT" ]; then
+    RECORDED_TARGET_ROOT=$(cd "$WT" 2>/dev/null && pwd -P) || exit 1
+  fi
+  if fm_host_root_paths_overlap "$RECORDED_HOST_ROOT" "$RECORDED_TARGET_ROOT"; then
+    echo "error: recorded host and target roots overlap (host '$RECORDED_HOST_ROOT'; target '$RECORDED_TARGET_ROOT'); refusing teardown and preserving recovery metadata" >&2
+    exit 1
+  fi
+fi
+
 require_orca_worktree_id() {
   local meta=$1 id
   id=$(meta_value "$meta" orca_worktree_id)
