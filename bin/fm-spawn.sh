@@ -624,7 +624,7 @@ if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
     && [ -f "$STATE/$ID.meta" ] \
     && grep -qx 'kind=secondmate' "$STATE/$ID.meta"; then
     : # The liveness sweep already proved this exact recorded secondmate recoverable.
-  else
+  elif [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ]; then
     echo "error: task metadata already exists for $ID; reconcile or tear down the retained task before spawning" >&2
     exit 1
   fi

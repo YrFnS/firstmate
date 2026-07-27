@@ -364,6 +364,52 @@ test_duplicate_spawn_preserves_existing_task() {
   pass "duplicate spawn preserves live and endpoint-free retained task records"
 }
 
+test_unset_herdr_retry_reaches_existing_identity_checks() {
+  local home="$TMP/unset-herdr-home" project="$TMP/unset-herdr-project" fb out status=0
+  fm_git_init_commit "$project"
+  mkdir -p "$home/data/herdr-retry" "$home/state" "$home/config"
+  printf 'Retry existing Herdr task.\n' > "$home/data/herdr-retry/brief.md"
+  : > "$home/config/herdr-presentation-spaces"
+  {
+    printf 'window=default:old-pane\n'
+    printf 'worktree=/tmp/old-herdr-worktree\n'
+    printf 'project=%s\n' "$project"
+    printf 'harness=codex\n'
+    printf 'kind=ship\n'
+    printf 'mode=no-mistakes\n'
+    printf 'backend=herdr\n'
+    printf 'herdr_session=default\n'
+    printf 'herdr_workspace_id=old-workspace\n'
+    printf 'herdr_tab_id=old-tab\n'
+    printf 'herdr_pane_id=old-pane\n'
+  } > "$home/state/herdr-retry.meta"
+  printf 'journal\n' > "$home/state/herdr-retry.herdr-presentation"
+  cp "$home/state/herdr-retry.meta" "$TMP/unset-herdr.meta"
+  fb=$(fm_fakebin "$TMP/fake-unset-herdr")
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *' status --json '*) printf '%s\n' '{"server":{"running":true}}' ;;
+  *' session list --json '*) printf '%s\n' '{"sessions":[{"name":"default","running":true,"socket_path":"/tmp/fake-herdr.sock"}]}' ;;
+  *' pane get old-pane '*) printf '%s\n' '{"result":{"pane":{"pane_id":"old-pane"}}}' ;;
+  *' agent get old-pane '*) printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fb/herdr"
+
+  out=$(env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    "$ROOT/bin/fm-spawn.sh" herdr-retry "$project" codex --backend herdr 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "unset-mode Herdr retry bypassed its live-endpoint refusal"
+  assert_contains "$out" 'existing herdr endpoint for herdr-retry is live' \
+    "unset-mode retry did not reach the established Herdr identity classifier"
+  assert_not_contains "$out" 'task metadata already exists for herdr-retry' \
+    "host-root metadata protection leaked into unset-mode Herdr recovery"
+  cmp -s "$TMP/unset-herdr.meta" "$home/state/herdr-retry.meta" \
+    || fail "unset-mode Herdr identity refusal changed existing metadata"
+  pass "unset-mode Herdr retries retain their established same-identity recovery checks"
+}
+
 test_spawn_rejects_host_as_target_and_cleans_failed_transition() {
   local host="$TMP/refusal-host" home="$TMP/refusal-home" project="$TMP/refusal-target" wt="$TMP/refusal-wt" fb log current tree_log out status=0
   make_host "$host"
@@ -796,6 +842,40 @@ test_host_teardown_requires_confirmed_stop() {
   pass "host-root teardown confirms endpoint absence before worktree cleanup"
 }
 
+test_host_teardown_refuses_recorded_overlap_before_mutation() {
+  local host="$TMP/overlap-teardown-host" home="$TMP/overlap-teardown-home" project="$TMP/overlap-teardown-project" fb log current tree_log out status=0 branch
+  make_host "$host"
+  fm_git_init_commit "$project"
+  mkdir -p "$home/state" "$home/config"
+  printf 'window=test-session:fm-overlap-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\n' \
+    "$host" "$host" "$project" > "$home/state/overlap-teardown.meta"
+  cp "$home/state/overlap-teardown.meta" "$TMP/overlap-teardown.meta"
+  touch "$home/state/.last-watcher-beat"
+  fb=$(make_fakebin "$TMP/fake-overlap-teardown")
+  log="$TMP/overlap-teardown.log"
+  current="$TMP/overlap-teardown.current"
+  tree_log="$TMP/overlap-teardown-treehouse.log"
+  printf '%s\n' "$host" > "$current"
+  : > "$current.endpoint"
+  : > "$log"
+  : > "$tree_log"
+  branch=$(git -C "$host" symbolic-ref --short HEAD)
+
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$host" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-teardown.sh" overlap-teardown --force 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "teardown accepted recorded overlapping host and target roots"
+  assert_contains "$out" 'recorded host and target roots overlap' "overlap refusal was not explicit"
+  assert_present "$current.endpoint" "overlap refusal stopped the recorded endpoint"
+  [ ! -s "$log" ] || fail "overlap refusal touched the recorded endpoint"
+  [ ! -s "$tree_log" ] || fail "overlap refusal invoked treehouse"
+  [ "$(git -C "$host" symbolic-ref --short HEAD)" = "$branch" ] || fail "overlap refusal changed the host Git branch"
+  cmp -s "$TMP/overlap-teardown.meta" "$home/state/overlap-teardown.meta" \
+    || fail "overlap refusal changed recovery metadata"
+  pass "host-root teardown preserves recorded overlaps before endpoint or Git mutation"
+}
+
 test_task_actions_use_recorded_host_root() {
   local host="$TMP/recorded-host" wrong="$TMP/wrong-host" home="$TMP/recorded-home" fb log current out status=0
   make_host "$host"; make_host "$wrong"; mkdir -p "$home/state" "$home/config"
@@ -877,6 +957,7 @@ test_brief_variants
 test_host_local_only_rejected_before_mutation
 test_spawn_separates_roots
 test_duplicate_spawn_preserves_existing_task
+test_unset_herdr_retry_reaches_existing_identity_checks
 test_spawn_rejects_host_as_target_and_cleans_failed_transition
 test_orca_active_cwd_probe
 test_all_harnesses_add_one_task_safeguard
@@ -885,5 +966,6 @@ test_secondmate_actions_keep_supervisor_host_authority
 test_spawn_rollback_is_transactional
 test_decision_actions_use_durable_host_owner
 test_host_teardown_requires_confirmed_stop
+test_host_teardown_refuses_recorded_overlap_before_mutation
 test_task_actions_use_recorded_host_root
 test_spawn_rejects_old_brief_and_secondmate_clears_roots
