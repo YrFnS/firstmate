@@ -10,6 +10,7 @@
 # fm_host_root_resolve <fm-root>       # prints the physical host root
 # fm_host_root_assert_session_cwd <fm-root>
 # fm_host_root_assert_task_cwd <fm-root> <task-meta>
+# fm_host_root_persist_task_owner <task-meta> <owner-file>
 # fm_host_root_paths_overlap <physical-host-root> <physical-target-root>
 # fm_host_root_command <fm-root> <repo-relative-command>
 
@@ -97,6 +98,27 @@ fm_host_root_assert_task_cwd() {
   cwd=$(pwd -P) || return 2
   [ "$cwd" = "$host" ] || {
     echo "error: task action requires the recorded host root cwd $host (current physical cwd: $cwd)" >&2
+    return 2
+  }
+}
+
+fm_host_root_persist_task_owner() {
+  local meta=$1 owner=$2 recorded
+  recorded=$(sed -n 's/^host_root=//p' "$meta" 2>/dev/null | tail -1)
+  [ -n "$recorded" ] || return 0
+  if [ -e "$owner" ] || [ -L "$owner" ]; then
+    [ -f "$owner" ] && [ ! -L "$owner" ] || {
+      echo "error: host owner is not a regular file: $owner" >&2
+      return 2
+    }
+    [ "$(cat "$owner")" = "host_root=$recorded" ] || {
+      echo "error: host owner does not match task metadata: $owner" >&2
+      return 2
+    }
+    return 0
+  fi
+  (umask 077; printf 'host_root=%s\n' "$recorded" > "$owner") || {
+    echo "error: could not persist host owner: $owner" >&2
     return 2
   }
 }

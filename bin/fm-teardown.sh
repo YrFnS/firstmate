@@ -255,6 +255,7 @@ if [ "$TASK_HOST_MODE" -eq 1 ]; then
     echo "error: recorded host and target roots overlap (host '$RECORDED_HOST_ROOT'; target '$RECORDED_TARGET_ROOT'); refusing teardown and preserving recovery metadata" >&2
     exit 1
   fi
+  fm_host_root_persist_task_owner "$META" "$DATA/$ID/host-root" || exit $?
 fi
 
 require_orca_worktree_id() {
