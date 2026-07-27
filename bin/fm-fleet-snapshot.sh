@@ -469,7 +469,8 @@ task_json_lines() {
 
     endpoint_exists=null
     if [ -n "$target" ]; then
-      if fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+      if ( fm_backend_bind_meta_context "$meta" >/dev/null 2>&1 \
+        && fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1 ); then
         endpoint_exists=true
       else
         endpoint_exists=false

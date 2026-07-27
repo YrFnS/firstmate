@@ -244,6 +244,24 @@ window_label() {
   [ -n "$task" ] && printf 'fm-%s' "$task"
 }
 
+window_bind_context() {
+  local meta
+  meta=$(fm_backend_meta_for_window "$1" "$STATE" 2>/dev/null || true)
+  [ -n "$meta" ] || return 0
+  fm_backend_bind_meta_context "$meta"
+}
+
+window_agent_alive() {
+  local meta backend marker socket
+  meta=$(fm_backend_meta_for_window "$1" "$STATE" 2>/dev/null || true)
+  backend=$(window_backend "$1")
+  if [ -n "$meta" ]; then
+    marker=$(fm_meta_get "$meta" tmux_window_marker)
+    socket=$(fm_meta_get "$meta" tmux_socket_path)
+  fi
+  fm_backend_agent_alive "$backend" "$1" "${marker:-}" "${socket:-}"
+}
+
 recorded_windows() {
   local meta w seen=
   for meta in "$STATE"/*.meta; do
@@ -382,7 +400,7 @@ pause_state_class() {  # <window> <task>
   fi
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
     if [ "$(window_kind "$win")" != secondmate ]; then
-      agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+      agent_alive=$(window_agent_alive "$win" 2>/dev/null) || agent_alive=unknown
       if [ "$agent_alive" != dead ]; then
         rm -f "$recheck_file"
         printf 'none'
@@ -399,7 +417,7 @@ pause_state_class() {  # <window> <task>
     return
   fi
   if [ "$(window_kind "$win")" != secondmate ]; then
-    agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+    agent_alive=$(window_agent_alive "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
       rm -f "$recheck_file"
       printf 'none'
@@ -877,7 +895,8 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused "$last"; then
       continue
     fi
-    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    tail40=$( ( window_bind_context "$w" \
+      && fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" ) 2>/dev/null) || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     key=$(printf '%s' "$w" | tr ':/.' '___')
     hf="$STATE/.hash-$key"
