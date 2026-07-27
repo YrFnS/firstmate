@@ -238,6 +238,10 @@ printf '%s\037' "$@" >> "$FM_TMUX_LOG"; printf '\n' >> "$FM_TMUX_LOG"
 endpoint=${FM_ENDPOINT_ALIVE:-$FM_CURRENT_PATH.endpoint}
 marker_file=${FM_TMUX_MARKER_FILE:-$endpoint.marker}
 marker=$(cat "$marker_file" 2>/dev/null || true)
+socket_path=${FM_TMUX_SOCKET_PATH:-$FM_CURRENT_PATH.tmux-socket}
+if [ "${1:-}" = -S ]; then
+  shift 2
+fi
 if [ "${1:-}" = send-keys ] && printf '%s\n' "$*" | grep -q -- ' -l '; then
   case "${*: -1}" in
     'Read the brief at '*' and follow it exactly.') : ;;
@@ -252,6 +256,7 @@ fi
 case "${1:-}" in
   display-message)
     case "$*" in
+      *'#{socket_path}'*) printf '%s\n' "$socket_path" ;;
       *'#{pane_current_path}'*) [ -f "$endpoint" ] && cat "$FM_CURRENT_PATH" ;;
       *'#{cursor_y}'*) printf '0\n' ;;
       *'#{window_id}'*) [ -f "$endpoint" ] && printf '@1\n' ;;
@@ -388,7 +393,7 @@ test_host_scout_records_logical_project_mode() {
 }
 
 test_spawn_separates_roots() {
-  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file out status=0 before after tree_line cd_line launch_line
+  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file socket out status=0 before after tree_line cd_line launch_line
   make_host "$host"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   fm_git_init_commit "$project"
@@ -407,9 +412,12 @@ test_spawn_separates_roots() {
   assert_grep "host_root=$host" "$meta" "spawn meta lost host root"
   assert_grep 'window=@1' "$meta" "host-root spawn did not persist the immutable tmux window id"
   marker=$(sed -n 's/^tmux_window_marker=//p' "$meta")
+  socket=$(sed -n 's/^tmux_socket_path=//p' "$meta")
   marker_file="$current.endpoint.marker"
   [ -n "$marker" ] || fail "host-root spawn did not persist a task-owned tmux marker"
+  [ "$socket" = "$current.tmux-socket" ] || fail "host-root spawn did not persist its creating tmux socket"
   [ "$(cat "$marker_file")" = "$marker" ] || fail "host-root spawn did not bind the live tmux window to its recorded marker"
+  assert_grep $'-S\037'"$socket" "$log" "host-root spawn did not keep task operations on the creating tmux socket"
   assert_contains "$(cat "$log")" "FM_TARGET_WORKTREE='$wt'" "child launch did not export exact target worktree"
   assert_contains "$(cat "$log")" "FM_HOST_ROOT='$host'" "child launch did not export exact host root"
   assert_contains "$(cat "$log")" 'notify=[' "Codex FirstMate turn-end safeguard was not retained"
@@ -945,7 +953,7 @@ SH
   for action in hold complete resolve; do
     action_id="decision-post-teardown-$action"
     mkdir -p "$home/data/$action_id"
-    printf 'window=test-session:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\ntmux_window_marker=decision-marker\n' \
+    printf 'window=test-session:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\ntmux_window_marker=decision-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
       "$action_id" "$host" > "$home/state/$action_id.meta"
     printf '%s\n' "$host" > "$current"
     : > "$current.endpoint"
@@ -988,7 +996,7 @@ test_host_teardown_requires_confirmed_stop() {
   local host="$TMP/teardown-host" home="$TMP/teardown-home" project="$TMP/teardown-project" wt="$TMP/teardown-wt" fb log current tree_log out status=0 kill_line verify_line return_line
   make_host "$host"; mkdir -p "$home/data/host-teardown" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
-  printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=teardown-marker\n' \
+  printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=teardown-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
     "$wt" "$host" "$project" > "$home/state/host-teardown.meta"
   fb=$(make_fakebin "$TMP/fake-host-teardown")
   log="$TMP/host-teardown.log"; current="$TMP/host-teardown.current"; tree_log="$TMP/host-teardown-treehouse.log"
@@ -1095,7 +1103,7 @@ test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup(
       "window=$target" "worktree=$childwt" "project=$childproj" \
       "backend=$backend" "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
     if [ "$backend" = tmux ]; then
-      printf 'tmux_window_marker=child-marker\n' >> "$subhome/state/child.meta"
+      printf 'tmux_window_marker=child-marker\ntmux_socket_path=/tmp/fm-test.sock\n' >> "$subhome/state/child.meta"
     fi
     fb=$(make_fakebin "$case_root/fake")
     if [ "$backend" = herdr ]; then
