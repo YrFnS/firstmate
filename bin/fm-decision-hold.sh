@@ -96,19 +96,6 @@ assert_origin_host() {  # <origin-id>
   fi
 }
 
-record_origin_host() {  # <origin-id> <meta>
-  local origin=$1 meta=$2 recorded owner="$DATA/$1/host-root"
-  recorded=$(meta_value "$meta" host_root)
-  [ -n "$recorded" ] || return 0
-  if [ -e "$owner" ] || [ -L "$owner" ]; then
-    [ -f "$owner" ] && [ ! -L "$owner" ] || fail "origin host owner is not a regular file: $owner"
-    [ "$(cat "$owner")" = "host_root=$recorded" ] || fail "origin host owner does not match task metadata: $owner"
-    return 0
-  fi
-  (umask 077; printf 'host_root=%s\n' "$recorded" > "$owner") \
-    || fail "could not persist origin host owner: $owner"
-}
-
 sha256_text() {  # <text>
   if command -v shasum >/dev/null 2>&1; then
     printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
@@ -349,7 +336,7 @@ $open
 EOF
 
   if [ "$has_meta" = 1 ]; then
-    record_origin_host "$origin" "$meta"
+    fm_host_root_persist_task_owner "$meta" "$DATA/$origin/host-root" || exit $?
   fi
   if [ "$has_meta" = 1 ]; then
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
