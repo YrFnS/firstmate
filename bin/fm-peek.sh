@@ -27,6 +27,7 @@ else
 fi
 
 "$SCRIPT_DIR/fm-guard.sh" || true
+[ -z "$TASK_META" ] || fm_backend_assert_recorded_endpoint_identity "$TASK_META" || exit $?
 
 T=$(fm_backend_resolve_selector "$RAW_TARGET" "$STATE")
 N=${2:-40}

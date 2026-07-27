@@ -236,6 +236,8 @@ make_fakebin() {
 set -u
 printf '%s\037' "$@" >> "$FM_TMUX_LOG"; printf '\n' >> "$FM_TMUX_LOG"
 endpoint=${FM_ENDPOINT_ALIVE:-$FM_CURRENT_PATH.endpoint}
+marker_file=${FM_TMUX_MARKER_FILE:-$endpoint.marker}
+marker=$(cat "$marker_file" 2>/dev/null || true)
 if [ "${1:-}" = send-keys ] && printf '%s\n' "$*" | grep -q -- ' -l '; then
   case "${*: -1}" in
     'Read the brief at '*' and follow it exactly.') : ;;
@@ -264,54 +266,59 @@ case "${1:-}" in
     ;;
   list-windows) [ -z "${FM_EXISTING_WINDOW:-}" ] || printf '%s\n' "$FM_EXISTING_WINDOW" ;;
   list-panes)
-    if [ "${FM_TMUX_NUMERIC_NAME_COLLISION:-0}" = 1 ]; then
-      printf '%%9|@9|test-session:1|test-session:1.0|test-session:0|test-session:0.0\n'
-      printf '%%1|@1|%s|%s|%s|%s\n' \
+    if [[ "$*" == *'#{window_id}|#{@firstmate_task_marker}'* ]] && [[ "$*" != *'#{pane_id}'* ]]; then
+      [ -f "$endpoint" ] && printf '@1|%s\n' "$marker"
+    elif [ "${FM_TMUX_NUMERIC_NAME_COLLISION:-0}" = 1 ]; then
+      printf '%%9|@9|test-session:1|test-session:1.0|test-session:0|test-session:0.0|other\n'
+      printf '%%1|@1|%s|%s|%s|%s|%s\n' \
         "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
         "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}" \
         "${FM_ENDPOINT_INDEX_ALIAS:-test-session:1}" \
-        "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
+        "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}" "$marker"
     elif [ "${FM_TMUX_RENUMBER_ON_STOP:-0}" = 1 ]; then
       case "$*" in
         *'#{window_name}.#{pane_index}'*)
           if [ -f "$endpoint" ]; then
-            printf '%%1|@1|%s|%s|test-session:1|test-session:1.0\n' \
+            printf '%%1|@1|%s|%s|test-session:1|test-session:1.0|%s\n' \
               "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
-              "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}"
-            printf '%%2|@2|test-session:survivor|test-session:survivor.0|test-session:2|test-session:2.0\n'
+              "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}" "$marker"
+            printf '%%2|@2|test-session:survivor|test-session:survivor.0|test-session:2|test-session:2.0|other\n'
           else
-            printf '%%2|@2|test-session:survivor|test-session:survivor.0|test-session:1|test-session:1.0\n'
+            printf '%%2|@2|test-session:survivor|test-session:survivor.0|test-session:1|test-session:1.0|other\n'
           fi
           ;;
         *)
           if [ -f "$endpoint" ]; then
-            printf '%%1|@1|%s|test-session:1|test-session:1.0\n' \
-              "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}"
-            printf '%%2|@2|test-session:survivor|test-session:2|test-session:2.0\n'
+            printf '%%1|@1|%s|test-session:1|test-session:1.0|%s\n' \
+              "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" "$marker"
+            printf '%%2|@2|test-session:survivor|test-session:2|test-session:2.0|other\n'
           else
-            printf '%%2|@2|test-session:survivor|test-session:1|test-session:1.0\n'
+            printf '%%2|@2|test-session:survivor|test-session:1|test-session:1.0|other\n'
           fi
           ;;
       esac
     elif [ -f "$endpoint" ]; then
       case "$*" in
         *'#{window_name}.#{pane_index}'*)
-          printf '%%1|@1|%s|%s|%s|%s\n' \
+          printf '%%1|@1|%s|%s|%s|%s|%s\n' \
             "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
             "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}" \
             "${FM_ENDPOINT_INDEX_ALIAS:-test-session:1}" \
-            "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
+            "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}" "$marker"
           ;;
         *)
-          printf '%%1|@1|%s|%s|%s\n' \
+          printf '%%1|@1|%s|%s|%s|%s\n' \
             "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
             "${FM_ENDPOINT_INDEX_ALIAS:-test-session:1}" \
-            "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
+            "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}" "$marker"
           ;;
       esac
     fi
     ;;
-  has-session|new-session|set-window-option) ;;
+  set-window-option)
+    [ "${*: -2:1}" != @firstmate_task_marker ] || printf '%s' "${*: -1}" > "$marker_file"
+    ;;
+  has-session|new-session) ;;
   new-window) : > "$endpoint"; printf '@1\n' ;;
   kill-window)
     [ -z "${FM_TMUX_KILL_MUTATION:-}" ] || printf 'late worker edit\n' > "$FM_TMUX_KILL_MUTATION"
@@ -351,7 +358,7 @@ SH
 }
 
 test_spawn_separates_roots() {
-  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta before after tree_line cd_line launch_line
+  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file out status=0 before after tree_line cd_line launch_line
   make_host "$host"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   fm_git_init_commit "$project"
@@ -369,6 +376,10 @@ test_spawn_separates_roots() {
   assert_grep "worktree=$wt" "$meta" "spawn meta lost target worktree"
   assert_grep "host_root=$host" "$meta" "spawn meta lost host root"
   assert_grep 'window=@1' "$meta" "host-root spawn did not persist the immutable tmux window id"
+  marker=$(sed -n 's/^tmux_window_marker=//p' "$meta")
+  marker_file="$current.endpoint.marker"
+  [ -n "$marker" ] || fail "host-root spawn did not persist a task-owned tmux marker"
+  [ "$(cat "$marker_file")" = "$marker" ] || fail "host-root spawn did not bind the live tmux window to its recorded marker"
   assert_contains "$(cat "$log")" "FM_TARGET_WORKTREE='$wt'" "child launch did not export exact target worktree"
   assert_contains "$(cat "$log")" "FM_HOST_ROOT='$host'" "child launch did not export exact host root"
   assert_contains "$(cat "$log")" 'notify=[' "Codex FirstMate turn-end safeguard was not retained"
@@ -398,7 +409,15 @@ PY
   assert_absent "$host/worker-edit.txt" "disposable worker probe edited the host root"
   after=$(git -C "$host" status --porcelain)
   [ "$before" = "$after" ] || fail "host working tree changed during spawn or worker probe"
-  pass "spawn orders and separates host cwd, target metadata, child environment, and target-only edits"
+  printf 'another-task' > "$marker_file"
+  : > "$log"
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" \
+    "$ROOT/bin/fm-send.sh" lane hello 2>&1) || status=$?
+  expect_code 2 "$status" "host-root send trusted a reused tmux window id"
+  assert_contains "$out" 'recorded tmux window identity does not match' "reused tmux window refusal was not explicit"
+  assert_no_grep 'send-keys' "$log" "host-root send targeted a tmux window owned by another task"
+  pass "spawn binds host-root tmux actions to a task-owned window marker"
 }
 
 test_duplicate_spawn_preserves_existing_task() {
@@ -896,10 +915,11 @@ SH
   for action in hold complete resolve; do
     action_id="decision-post-teardown-$action"
     mkdir -p "$home/data/$action_id"
-    printf 'window=test-session:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\n' \
+    printf 'window=test-session:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\ntmux_window_marker=decision-marker\n' \
       "$action_id" "$host" > "$home/state/$action_id.meta"
     printf '%s\n' "$host" > "$current"
     : > "$current.endpoint"
+    printf 'decision-marker' > "$current.endpoint.marker"
     : > "$log"
     : > "$tree_log"
     (cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
@@ -938,11 +958,11 @@ test_host_teardown_requires_confirmed_stop() {
   local host="$TMP/teardown-host" home="$TMP/teardown-home" project="$TMP/teardown-project" wt="$TMP/teardown-wt" fb log current tree_log out status=0 kill_line verify_line return_line
   make_host "$host"; mkdir -p "$home/data/host-teardown" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
-  printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\n' \
+  printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=teardown-marker\n' \
     "$wt" "$host" "$project" > "$home/state/host-teardown.meta"
   fb=$(make_fakebin "$TMP/fake-host-teardown")
   log="$TMP/host-teardown.log"; current="$TMP/host-teardown.current"; tree_log="$TMP/host-teardown-treehouse.log"
-  printf '%s\n' "$host" > "$current"; : > "$current.endpoint"; : > "$log"; : > "$tree_log"
+  printf '%s\n' "$host" > "$current"; : > "$current.endpoint"; printf 'teardown-marker' > "$current.endpoint.marker"; : > "$log"; : > "$tree_log"
   out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
@@ -1044,6 +1064,9 @@ test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup(
     fm_write_meta "$subhome/state/child.meta" \
       "window=$target" "worktree=$childwt" "project=$childproj" \
       "backend=$backend" "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
+    if [ "$backend" = tmux ]; then
+      printf 'tmux_window_marker=child-marker\n' >> "$subhome/state/child.meta"
+    fi
     fb=$(make_fakebin "$case_root/fake")
     if [ "$backend" = herdr ]; then
       printf '%s\n' \
@@ -1072,6 +1095,7 @@ SH
     tree_log="$case_root/treehouse.log"
     printf '%s\n' "$host" > "$current"
     : > "$current.endpoint"
+    [ "$backend" != tmux ] || printf 'child-marker' > "$current.endpoint.marker"
     : > "$log"
     : > "$tree_log"
     status=0
