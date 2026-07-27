@@ -561,12 +561,17 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
 fi
 SPAWN_TASK_LOCK_HELD=1
 if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
+  RETAINED_HOST_MODE=0
+  if [ -f "$STATE/$ID.meta" ] && grep -q '^host_root=.' "$STATE/$ID.meta"; then
+    RETAINED_HOST_MODE=1
+  fi
   if [ "${FM_SPAWN_SECOND_MATE_RECOVERY:-0}" = 1 ] \
     && [ "$KIND" = secondmate ] \
     && [ -f "$STATE/$ID.meta" ] \
-    && grep -qx 'kind=secondmate' "$STATE/$ID.meta"; then
+    && grep -qx 'kind=secondmate' "$STATE/$ID.meta" \
+    && [ "$RETAINED_HOST_MODE" -eq 0 ]; then
     : # The liveness sweep already proved this exact recorded secondmate recoverable.
-  elif [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ]; then
+  elif [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ] || [ "$RETAINED_HOST_MODE" -eq 1 ]; then
     echo "error: task metadata already exists for $ID; reconcile or tear down the retained task before spawning" >&2
     exit 1
   fi
