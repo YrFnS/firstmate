@@ -67,6 +67,17 @@ fm_backend_tmux_container_ensure() {
   fi
 }
 
+fm_backend_tmux_task_marker() {
+  local token
+  token=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null \
+    | base64 \
+    | tr '+/' '-_' \
+    | tr -d '=\r\n') || return 1
+  [ "${#token}" -eq 22 ] || return 1
+  case "$token" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+  printf 'fm-%s' "$token"
+}
+
 # fm_backend_tmux_create_task: create the task's window in <proj-abs>,
 # refusing an existing <window-name> in <session>. Mirrors fm-spawn.sh's
 # duplicate-check-then-new-window sequence, including the exact error text
@@ -82,13 +93,17 @@ fm_backend_tmux_container_ensure() {
 #     treehouse cd's into the worktree, which would break name-based targeting.
 # The returned window id lets callers target the window even if its name is ever
 # lost, so worktree discovery cannot fall back to the active client's window.
-fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints window id
-  local ses=$1 wname=$2 proj_abs=$3 wid
+fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> [task-marker] -> prints window id
+  local ses=$1 wname=$2 proj_abs=$3 marker=${4:-} wid
   if tmux list-windows -t "$ses" -F '#{window_name}' | grep -qx "$wname"; then
     echo "error: window $ses:$wname already exists" >&2
     return 1
   fi
   wid=$(tmux new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs") || return 1
+  if [ -n "$marker" ] && ! tmux set-window-option -t "$wid" @firstmate_task_marker "$marker" 2>/dev/null; then
+    tmux kill-window -t "$wid" 2>/dev/null || true
+    return 1
+  fi
   tmux set-window-option -t "$wid" automatic-rename off 2>/dev/null || true
   tmux set-window-option -t "$wid" allow-rename off 2>/dev/null || true
   printf '%s\n' "$wid"
@@ -120,9 +135,9 @@ fm_backend_tmux_send_literal() {  # <target> <text>
 # Resolve any exact tmux handle accepted for a recorded task window to its
 # server-global window id. Inventory matching avoids display-message's dangerous
 # fallback to the active window when a named target has disappeared.
-fm_backend_tmux_canonical_window() {  # <target> -> @<window-id>
-  local target=$1 out status pane_id window_id named named_pane indexed_window indexed_pane matched=
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
+fm_backend_tmux_canonical_window() {  # <target> [task-marker] -> @<window-id>
+  local target=$1 expected_marker=${2:-} out status pane_id window_id named named_pane indexed_window indexed_pane marker matched= named_seen=0
+  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     case "$out" in
@@ -130,17 +145,20 @@ fm_backend_tmux_canonical_window() {  # <target> -> @<window-id>
       *) return 1 ;;
     esac
   fi
-  while IFS='|' read -r pane_id window_id named named_pane indexed_window indexed_pane; do
+  while IFS='|' read -r pane_id window_id named named_pane indexed_window indexed_pane marker; do
     case "$target" in
       "$pane_id"|"$window_id"|"$indexed_window"|"$indexed_pane")
+        [ -z "$expected_marker" ] || [ "$marker" = "$expected_marker" ] || return 1
         printf '%s' "$window_id"
         return 0
         ;;
     esac
   done <<< "$out"
-  while IFS='|' read -r pane_id window_id named named_pane indexed_window indexed_pane; do
+  while IFS='|' read -r pane_id window_id named named_pane indexed_window indexed_pane marker; do
     case "$target" in
       "$named"|"$named_pane")
+        named_seen=1
+        [ -z "$expected_marker" ] || [ "$marker" = "$expected_marker" ] || continue
         if [ -n "$matched" ] && [ "$matched" != "$window_id" ]; then
           return 1
         fi
@@ -152,6 +170,7 @@ fm_backend_tmux_canonical_window() {  # <target> -> @<window-id>
     printf '%s' "$matched"
     return 0
   fi
+  [ "$named_seen" -eq 0 ] || [ -z "$expected_marker" ] || return 1
   return 2
 }
 
@@ -159,14 +178,21 @@ fm_backend_tmux_canonical_window() {  # <target> -> @<window-id>
 # `display-message -t` silently falls back to the active window when a named
 # target disappeared, which would report a killed worker as still present.
 # A readable inventory proves presence/absence; control-plane failures stay unknown.
-fm_backend_tmux_target_state() {  # <target> -> present|absent|unknown
-  local target=$1 out status pane_id window_id named indexed_window indexed_pane
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
+fm_backend_tmux_target_state() {  # <target> [task-marker] -> present|absent|unknown
+  local target=$1 expected_marker=${2:-} out status pane_id window_id named indexed_window indexed_pane marker
+  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
-    while IFS='|' read -r pane_id window_id named indexed_window indexed_pane; do
+    while IFS='|' read -r pane_id window_id named indexed_window indexed_pane marker; do
       case "$target" in
-        "$pane_id"|"$window_id"|"$named"|"$indexed_window"|"$indexed_pane") printf 'present'; return 0 ;;
+        "$pane_id"|"$window_id"|"$named"|"$indexed_window"|"$indexed_pane")
+          if [ -n "$expected_marker" ] && [ "$marker" != "$expected_marker" ]; then
+            printf 'unknown'
+          else
+            printf 'present'
+          fi
+          return 0
+          ;;
       esac
     done <<< "$out"
     printf 'absent'
@@ -218,11 +244,11 @@ fm_backend_tmux_current_command() {  # <target>
 # An omitted window or a definitive missing-session/server response is
 # `missing`; any other inventory or pane read failure is `unreadable`, so a
 # transient tmux problem never licenses a duplicate.
-fm_backend_tmux_agent_state() {  # <target>
-  local target=$1 comm session window windows inventory_status
+fm_backend_tmux_agent_state() {  # <target> [task-marker]
+  local target=$1 expected_marker=${2:-} comm session window windows inventory_status found=0 marker=
   case "$target" in
     @*)
-      if windows=$(LC_ALL=C tmux list-panes -a -F '#{window_id}' 2>&1); then
+      if windows=$(LC_ALL=C tmux list-panes -a -F '#{window_id}|#{@firstmate_task_marker}' 2>&1); then
         inventory_status=0
       else
         inventory_status=$?
@@ -232,7 +258,7 @@ fm_backend_tmux_agent_state() {  # <target>
     *:*)
       session=${target%%:*}
       window=${target#*:}
-      if windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}' 2>&1); then
+      if windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}|#{@firstmate_task_marker}' 2>&1); then
         inventory_status=0
       else
         inventory_status=$?
@@ -251,13 +277,22 @@ fm_backend_tmux_agent_state() {  # <target>
     esac
     return 0
   fi
-  case "$target" in
-    @*) printf '%s\n' "$windows" | grep -Fqx "$target" ;;
-    *) printf '%s\n' "$windows" | grep -Fqx "$window" ;;
-  esac || {
+  while IFS='|' read -r candidate marker; do
+    case "$target" in
+      @*) [ "$candidate" = "$target" ] || continue ;;
+      *) [ "$candidate" = "$window" ] || continue ;;
+    esac
+    found=1
+    break
+  done <<< "$windows"
+  if [ "$found" -eq 0 ]; then
     printf 'missing'
     return 0
-  }
+  fi
+  if [ -n "$expected_marker" ] && [ "$marker" != "$expected_marker" ]; then
+    printf 'unreadable'
+    return 0
+  fi
 
   comm=$(fm_backend_tmux_current_command "$target") || {
     printf 'unreadable'
