@@ -231,7 +231,8 @@ case "${1:-}" in
     fi
     ;;
   list-windows) [ -z "${FM_EXISTING_WINDOW:-}" ] || printf '%s\n' "$FM_EXISTING_WINDOW" ;;
-  list-panes) [ ! -f "$endpoint" ] || printf '%%1|@1|%s|test-session:1.0\n' "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" ;;
+  list-panes) [ ! -f "$endpoint" ] || printf '%%1|@1|%s|%s\n' \
+    "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" "${FM_ENDPOINT_ALIAS:-test-session:1.0}" ;;
   has-session|new-session|set-window-option) ;;
   new-window) : > "$endpoint"; printf '%%1\n' ;;
   kill-window)
@@ -838,6 +839,25 @@ test_task_actions_use_recorded_host_root() {
   expect_code 2 "$status" "send must reject an ambient host that differs from task ownership"
   assert_contains "$out" 'does not match task metadata host_root' "send did not identify recorded host ownership"
   assert_no_grep 'send-keys' "$log" "send touched the endpoint before recorded-host validation"
+
+  : > "$log"; status=0
+  out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
+    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_ALIAS=test-session:fm-lane.0 \
+    FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
+    "$ROOT/bin/fm-peek.sh" test-session:fm-lane.0 2>&1) || status=$?
+  expect_code 2 "$status" "peek must bind an equivalent tmux pane alias to recorded task ownership"
+  assert_contains "$out" 'does not match task metadata host_root' "peek alias did not identify recorded host ownership"
+  assert_no_grep 'capture-pane' "$log" "peek alias captured the endpoint before recorded-host validation"
+
+  : > "$log"; status=0
+  out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
+    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_ALIAS=test-session:fm-lane.0 \
+    FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
+    "$ROOT/bin/fm-send.sh" test-session:fm-lane.0 hello 2>&1) || status=$?
+  expect_code 2 "$status" "send must bind an equivalent tmux pane alias to recorded task ownership"
+  assert_contains "$out" 'does not match task metadata host_root' "send alias did not identify recorded host ownership"
+  assert_no_grep 'send-keys' "$log" "send alias touched the endpoint before recorded-host validation"
+
   status=0
   out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
     FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
