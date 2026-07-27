@@ -159,7 +159,7 @@ fm_backend_tmux_canonical_window() {  # <target> [task-marker] -> @<window-id>
   status=$?
   if [ "$status" -ne 0 ]; then
     case "$out" in
-      *'no server running'*|*'no sessions'*) return 2 ;;
+      *'no server running'*|*'no sessions'*|*'No such file or directory'*|*'Connection refused'*) return 2 ;;
       *) return 1 ;;
     esac
   fi
@@ -216,7 +216,7 @@ fm_backend_tmux_target_state() {  # <target> [task-marker] -> present|absent|unk
     printf 'absent'
   else
     case "$out" in
-      *'no server running'*|*'no sessions'*) printf 'absent' ;;
+      *'no server running'*|*'no sessions'*|*'No such file or directory'*|*'Connection refused'*) printf 'absent' ;;
       *) printf 'unknown' ;;
     esac
   fi
