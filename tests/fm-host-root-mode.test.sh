@@ -232,7 +232,36 @@ case "${1:-}" in
     ;;
   list-windows) [ -z "${FM_EXISTING_WINDOW:-}" ] || printf '%s\n' "$FM_EXISTING_WINDOW" ;;
   list-panes)
-    if [ -f "$endpoint" ]; then
+    if [ "${FM_TMUX_NUMERIC_NAME_COLLISION:-0}" = 1 ]; then
+      printf '%%9|@9|test-session:1|test-session:1.0|test-session:0|test-session:0.0\n'
+      printf '%%1|@1|%s|%s|%s|%s\n' \
+        "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
+        "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}" \
+        "${FM_ENDPOINT_INDEX_ALIAS:-test-session:1}" \
+        "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
+    elif [ "${FM_TMUX_RENUMBER_ON_STOP:-0}" = 1 ]; then
+      case "$*" in
+        *'#{window_name}.#{pane_index}'*)
+          if [ -f "$endpoint" ]; then
+            printf '%%1|@1|%s|%s|test-session:1|test-session:1.0\n' \
+              "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
+              "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}"
+            printf '%%2|@2|test-session:survivor|test-session:survivor.0|test-session:2|test-session:2.0\n'
+          else
+            printf '%%2|@2|test-session:survivor|test-session:survivor.0|test-session:1|test-session:1.0\n'
+          fi
+          ;;
+        *)
+          if [ -f "$endpoint" ]; then
+            printf '%%1|@1|%s|test-session:1|test-session:1.0\n' \
+              "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}"
+            printf '%%2|@2|test-session:survivor|test-session:2|test-session:2.0\n'
+          else
+            printf '%%2|@2|test-session:survivor|test-session:1|test-session:1.0\n'
+          fi
+          ;;
+      esac
+    elif [ -f "$endpoint" ]; then
       case "$*" in
         *'#{window_name}.#{pane_index}'*)
           printf '%%1|@1|%s|%s|%s|%s\n' \
@@ -440,7 +469,8 @@ test_spawn_rejects_host_as_target_and_cleans_failed_transition() {
 
   printf '%s\n' "$project" > "$current"
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/refusal.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$host" \
+    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-host-target \
+    FM_LAUNCH_FILE="$TMP/refusal.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$host" \
     FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
     "$ROOT/bin/fm-spawn.sh" host-target "$project" codex 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "spawn accepted FM_HOST_ROOT as the target worktree"
@@ -452,7 +482,8 @@ test_spawn_rejects_host_as_target_and_cleans_failed_transition() {
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_HOST_CWD_ATTEMPTS=1 FM_HOST_CWD_DELAY=0 FM_REFUSE_HOST_MOVE=1 \
-    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/move-fail.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" \
+    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-move-fail \
+    FM_LAUNCH_FILE="$TMP/move-fail.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" \
     FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
     "$ROOT/bin/fm-spawn.sh" move-fail "$project" codex 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "spawn accepted a backend that never entered FM_HOST_ROOT"
@@ -700,7 +731,8 @@ test_spawn_rollback_is_transactional() {
   log="$TMP/rollback.log"; current="$TMP/rollback.current"; tree_log="$TMP/rollback-treehouse.log"
   printf '%s\n' "$project" > "$current"
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    FM_FAIL_LAUNCH_SEND=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback.launch" \
+    FM_FAIL_LAUNCH_SEND=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-rollback-clean FM_LAUNCH_FILE="$TMP/rollback.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
     "$ROOT/bin/fm-spawn.sh" rollback-clean "$project" pi 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected launch failure unexpectedly succeeded"
@@ -712,7 +744,8 @@ test_spawn_rollback_is_transactional() {
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
-    FM_LAUNCH_FILE="$TMP/rollback-stuck.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$stuck_wt" FM_HOST_PATH="$host" \
+    FM_ENDPOINT_TARGET=test-session:fm-rollback-stuck FM_LAUNCH_FILE="$TMP/rollback-stuck.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$stuck_wt" FM_HOST_PATH="$host" \
     FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-stuck "$project" pi 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected stop failure unexpectedly succeeded"
   assert_contains "$out" 'still exists after stop' "failed endpoint termination was not explicit (backend log: $(tr '\n' ';' < "$log"))"
@@ -741,7 +774,8 @@ test_spawn_rollback_is_transactional() {
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_RETURN=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
-    FM_LAUNCH_FILE="$TMP/rollback-retained.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$retained_wt" FM_HOST_PATH="$host" \
+    FM_ENDPOINT_TARGET=test-session:fm-rollback-retained FM_LAUNCH_FILE="$TMP/rollback-retained.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$retained_wt" FM_HOST_PATH="$host" \
     FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected worktree return failure unexpectedly succeeded"
   assert_present "$home/state/rollback-retained.meta" "worktree return failure lost recovery metadata"
@@ -898,13 +932,18 @@ test_host_teardown_requires_confirmed_stop() {
   assert_no_grep 'return --force' "$tree_log" "post-stop tmux safety refusal returned the worktree"
   rm -f "$wt/late-edit.txt"
 
-  : > "$log"; : > "$tree_log"; status=0
+  : > "$current.endpoint"; : > "$log"; : > "$tree_log"; status=0
+  sed -i.bak 's/^window=.*/window=test-session:1/' "$home/state/host-teardown.meta"
+  rm -f "$home/state/host-teardown.meta.bak"
   out=$(cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
-    FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
+    FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" FM_TMUX_RENUMBER_ON_STOP=1 \
+    FM_ENDPOINT_TARGET=test-session:fm-host-teardown FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
+    FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" \
     FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
     "$ROOT/bin/fm-teardown.sh" host-teardown --force 2>&1) || status=$?
   expect_code 0 "$status" "host-root teardown failed after confirmed endpoint stop: $out"
+  assert_grep $'kill-window\037-t\037@1' "$log" \
+    "host-root teardown did not stop the immutable tmux window id"
   kill_line=$(grep -n 'kill-window' "$log" | tail -1 | cut -d: -f1)
   verify_line=$(awk -v start="$kill_line" 'NR > start && /list-panes/ { print NR; exit }' "$log")
   return_line=$(grep -n 'return --force' "$tree_log" | head -1 | cut -d: -f1)
@@ -1061,21 +1100,23 @@ test_task_actions_use_recorded_host_root() {
 
   : > "$log"; status=0
   out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
-    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
+    FM_TMUX_LOG="$log" FM_TMUX_NUMERIC_NAME_COLLISION=1 \
+    FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
     FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
     "$ROOT/bin/fm-peek.sh" test-session:1 2>&1) || status=$?
-  expect_code 2 "$status" "peek must bind a tmux window-index alias to recorded task ownership"
-  assert_contains "$out" 'does not match task metadata host_root' "peek window-index alias lost recorded host ownership"
-  assert_no_grep 'capture-pane' "$log" "peek window-index alias captured the endpoint before recorded-host validation"
+  expect_code 2 "$status" "peek must prefer a tmux window index over a colliding numeric name"
+  assert_contains "$out" 'does not match task metadata host_root' "peek numeric collision lost recorded host ownership"
+  assert_no_grep 'capture-pane' "$log" "peek numeric collision captured the endpoint before recorded-host validation"
 
   : > "$log"; status=0
   out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
-    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
+    FM_TMUX_LOG="$log" FM_TMUX_NUMERIC_NAME_COLLISION=1 \
+    FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
     FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
     "$ROOT/bin/fm-send.sh" test-session:1 hello 2>&1) || status=$?
-  expect_code 2 "$status" "send must bind a tmux window-index alias to recorded task ownership"
-  assert_contains "$out" 'does not match task metadata host_root' "send window-index alias lost recorded host ownership"
-  assert_no_grep 'send-keys' "$log" "send window-index alias touched the endpoint before recorded-host validation"
+  expect_code 2 "$status" "send must prefer a tmux window index over a colliding numeric name"
+  assert_contains "$out" 'does not match task metadata host_root' "send numeric collision lost recorded host ownership"
+  assert_no_grep 'send-keys' "$log" "send numeric collision touched the endpoint before recorded-host validation"
 
   status=0
   out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \

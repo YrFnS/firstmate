@@ -121,18 +121,32 @@ fm_backend_tmux_send_literal() {  # <target> <text>
 # server-global window id. Inventory matching avoids display-message's dangerous
 # fallback to the active window when a named target has disappeared.
 fm_backend_tmux_canonical_window() {  # <target> -> @<window-id>
-  local target=$1 out pane_id window_id named named_pane indexed_window indexed_pane
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}') \
-    || return 1
+  local target=$1 out status pane_id window_id named named_pane indexed_window indexed_pane
+  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    case "$out" in
+      *'no server running'*|*'no sessions'*) return 2 ;;
+      *) return 1 ;;
+    esac
+  fi
   while IFS='|' read -r pane_id window_id named named_pane indexed_window indexed_pane; do
     case "$target" in
-      "$pane_id"|"$window_id"|"$named"|"$named_pane"|"$indexed_window"|"$indexed_pane")
+      "$pane_id"|"$window_id"|"$indexed_window"|"$indexed_pane")
         printf '%s' "$window_id"
         return 0
         ;;
     esac
   done <<< "$out"
-  return 1
+  while IFS='|' read -r pane_id window_id named named_pane indexed_window indexed_pane; do
+    case "$target" in
+      "$named"|"$named_pane")
+        printf '%s' "$window_id"
+        return 0
+        ;;
+    esac
+  done <<< "$out"
+  return 2
 }
 
 # Tri-state endpoint probe for destructive cleanup. Enumerate exact handles:
