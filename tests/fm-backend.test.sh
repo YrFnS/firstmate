@@ -1152,7 +1152,8 @@ test_stop_and_verify_requires_confirmed_absence() {
 
   status=0
   out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '
-    . "$1/bin/fm-backend.sh"
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_tmux_canonical_window() { printf @1; }
     fm_backend_kill() { return 0; }
     fm_backend_target_state() { printf unknown; }
     fm_backend_stop_and_verify tmux session:fm-task
@@ -1162,7 +1163,8 @@ test_stop_and_verify_requires_confirmed_absence() {
 
   status=0
   out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '
-    . "$1/bin/fm-backend.sh"
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_tmux_canonical_window() { printf @1; }
     fm_backend_kill() { return 0; }
     fm_backend_target_state() { printf absent; }
     fm_backend_stop_and_verify tmux session:fm-task
