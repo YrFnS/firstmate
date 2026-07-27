@@ -18,7 +18,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 RAW_TARGET=$1
 TASK_META=$(fm_backend_meta_for_selector "$RAW_TARGET" "$STATE" 2>/dev/null || true)
 if [ -z "$TASK_META" ]; then
-  TASK_META=$(fm_backend_meta_for_window "$RAW_TARGET" "$STATE" 2>/dev/null || true)
+  TASK_META=$(fm_backend_meta_for_target "$RAW_TARGET" "$STATE" 2>/dev/null || true)
 fi
 if [ -n "$TASK_META" ]; then
   fm_host_root_assert_task_cwd "$FM_ROOT" "$TASK_META" || exit $?
