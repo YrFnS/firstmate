@@ -370,6 +370,23 @@ test_sweep_respawns_confirmed_dead_secondmate() {
   pass "sweep: a confirmed-dead secondmate endpoint is killed and respawned"
 }
 
+test_direct_secondmate_respawn_cannot_bypass_retained_metadata() {
+  local w fb tmuxfb log out status=0
+  w=$(new_world direct-duplicate)
+  add_sm_home "$w" sm1 firstmate:fm-sm1
+  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+  log="$w/calls.log"; : > "$log"
+
+  out=$(PATH="$tmuxfb:$fb:$BASE_PATH" FM_HOME="$w/home" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" sm1 --secondmate 2>&1) || status=$?
+
+  [ "$status" -ne 0 ] || fail "direct same-id secondmate respawn bypassed retained metadata"
+  assert_contains "$out" "task metadata already exists for sm1" \
+    "direct secondmate duplicate refusal was not explicit"
+  [ ! -s "$log" ] || fail "direct secondmate duplicate inspected or created an endpoint: $(cat "$log")"
+  pass "sweep: only recovery-classified secondmate relaunches may replace retained metadata"
+}
+
 test_sweep_leaves_alive_secondmate_untouched() {
   local w fb tmuxfb log out
   w=$(new_world sweep-alive)
@@ -545,6 +562,7 @@ test_tmux_agent_state_rejects_malformed_targets_before_probe
 test_herdr_agent_state_preserves_husk_classifier
 test_agent_state_dispatcher_and_compatibility
 test_sweep_respawns_confirmed_dead_secondmate
+test_direct_secondmate_respawn_cannot_bypass_retained_metadata
 test_sweep_leaves_alive_secondmate_untouched
 test_sweep_respawns_authoritatively_missing_pi_secondmate
 test_sweep_respawns_authoritatively_missing_pi_signed_secondmate

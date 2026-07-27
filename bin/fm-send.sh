@@ -258,7 +258,7 @@ fm_send_resolve_target() {  # <raw-target>
     return 1
   fi
 
-  meta=$(fm_backend_meta_for_window "$raw" "$STATE" 2>/dev/null || true)
+  meta=$(fm_backend_meta_for_target "$raw" "$STATE" 2>/dev/null || true)
   if [ -n "$meta" ]; then
     if [ "$meta" != "${BOUND_META:-}" ]; then
       fm_host_root_assert_task_cwd "$FM_ROOT" "$meta" || return $?
@@ -312,7 +312,7 @@ if [ -n "$CANDIDATE_META" ]; then
   fm_host_root_assert_task_cwd "$FM_ROOT" "$CANDIDATE_META" || exit $?
   BOUND_META=$CANDIDATE_META
 fi
-fm_send_resolve_target "$RAW_TARGET" || exit 1
+fm_send_resolve_target "$RAW_TARGET" || exit $?
 if [ -z "$TARGET_META" ]; then
   fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
 fi
