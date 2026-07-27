@@ -1033,7 +1033,12 @@ cleanup_firstmate_home_children() {
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       fi
     fi
-    if [ "$child_host_mode" -eq 1 ]; then
+    if [ "$child_host_mode" -eq 1 ] \
+       && [ "$child_backend" = herdr ] \
+       && { [ -e "$sub_state/$child_id.herdr-presentation" ] || [ -L "$sub_state/$child_id.herdr-presentation" ]; }; then
+      echo "error: herdr presentation state for child $child_id requires direct child teardown; refusing destructive cleanup" >&2
+      return 1
+    elif [ "$child_host_mode" -eq 1 ]; then
       ( unset FM_ROOT_OVERRIDE FM_CONFIG_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) || return 1
     elif [ -n "$child_t" ]; then
       case "$child_backend" in
