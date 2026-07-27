@@ -544,6 +544,45 @@ fm_backend_meta_for_window() {  # <target> <state-dir>
   return 1
 }
 
+# Match an exact recorded target first, then recognize equivalent explicit tmux
+# handles by their inventory-backed window id. Bare names remain on the legacy
+# resolver because they can be ambiguous across sessions.
+fm_backend_meta_for_target() {  # <target> <state-dir>
+  local target=$1 state=$2 meta canonical recorded recorded_canonical host_meta=0
+  meta=$(fm_backend_meta_for_window "$target" "$state" 2>/dev/null || true)
+  if [ -n "$meta" ]; then
+    printf '%s' "$meta"
+    return 0
+  fi
+  case "$target" in
+    *:*:*) return 1 ;; # Herdr uses session:workspace:pane and is never a tmux alias.
+    *:*|%*|@*) ;;
+    *) return 1 ;;
+  esac
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || continue
+    [ "$(fm_backend_of_meta "$meta")" = tmux ] || continue
+    grep -q '^host_root=.' "$meta" 2>/dev/null || continue
+    host_meta=1
+    break
+  done
+  [ "$host_meta" = 1 ] || return 1
+  fm_backend_source tmux >/dev/null 2>&1 || return 1
+  canonical=$(fm_backend_tmux_canonical_window "$target" 2>/dev/null) || return 1
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || continue
+    [ "$(fm_backend_of_meta "$meta")" = tmux ] || continue
+    grep -q '^host_root=.' "$meta" 2>/dev/null || continue
+    recorded=$(fm_backend_target_of_meta "$meta")
+    [ -n "$recorded" ] || continue
+    recorded_canonical=$(fm_backend_tmux_canonical_window "$recorded" 2>/dev/null) || continue
+    [ "$recorded_canonical" = "$canonical" ] || continue
+    printf '%s' "$meta"
+    return 0
+  done
+  return 1
+}
+
 fm_backend_task_id_for_selector() {  # <raw-target> <state-dir>
   local raw=$1 state=$2 id
   case "$raw" in
@@ -635,30 +674,24 @@ fm_backend_source() {  # <name>
 }
 
 # fm_backend_resolve_selector: resolve a raw fm-send.sh/fm-peek.sh style
-# selector to a live session-provider target. Four forms, in order:
-#   target with ":"   used as-is (the escape hatch for a window/pane outside
-#                      this firstmate home) - backend-independent, a literal string.
+# selector to a live session-provider target. Five forms, in order:
 #   exact task id      routed through <state-dir>/<id>.meta's backend target
-#                      (`window=` normally, `terminal=` for Orca) -
-#                      backend-independent, a stored value, NOT re-verified
-#                      against a live backend inventory (matches today's
-#                      behavior: tmux window names can be trusted from meta
-#                      without a live re-check).
+#                      (`window=` normally, `terminal=` for Orca).
 #   "fm-<id>"          legacy task window label fallback routed through
 #                      <state-dir>/<id>.meta when no exact
 #                      <state-dir>/fm-<id>.meta exists.
-#   anything else      first matched against recorded `window=`/`terminal=`
-#                      metadata, then treated as an ad hoc bare window name and
-#                      resolved by searching the legacy tmux live inventory.
+#   recorded target    exact target or equivalent explicit tmux handle routed
+#                      through the owning metadata before external fallback.
+#   target with ":"   otherwise used as-is as the escape hatch for an endpoint
+#                      outside this firstmate home.
+#   anything else      treated as an ad hoc bare window name and resolved by
+#                      searching the legacy tmux live inventory.
 fm_backend_resolve_selector() {  # <raw-target> <state-dir>
   local raw=$1 state=$2 meta window
-  case "$raw" in
-    *:*)
-      printf '%s' "$raw"
-      return 0
-      ;;
-  esac
   meta=$(fm_backend_meta_for_selector "$raw" "$state" 2>/dev/null || true)
+  if [ -z "$meta" ]; then
+    meta=$(fm_backend_meta_for_target "$raw" "$state" 2>/dev/null || true)
+  fi
   if [ -n "$meta" ]; then
     window=$(fm_backend_target_of_meta "$meta")
     [ -n "$window" ] || { echo "error: no backend target recorded in $meta" >&2; return 1; }
@@ -666,18 +699,15 @@ fm_backend_resolve_selector() {  # <raw-target> <state-dir>
     return 0
   fi
   case "$raw" in
+    *:*)
+      printf '%s' "$raw"
+      return 0
+      ;;
     fm-*)
       echo "error: no metadata for $raw in $state; pass session:window to target a window outside this firstmate home" >&2
       return 1
       ;;
     *)
-      meta=$(fm_backend_meta_for_window "$raw" "$state" 2>/dev/null || true)
-      if [ -n "$meta" ]; then
-        window=$(fm_backend_target_of_meta "$meta")
-        [ -n "$window" ] || { echo "error: no backend target recorded in $meta" >&2; return 1; }
-        printf '%s' "$window"
-        return 0
-      fi
       fm_backend_source tmux || return 1
       fm_backend_tmux_resolve_bare_selector "$raw"
       ;;

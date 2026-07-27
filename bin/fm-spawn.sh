@@ -85,6 +85,9 @@
 #   provisioned firstmate home; the default is kind=ship.
 #   Before a secondmate launch, the home is locally fast-forwarded to the primary
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
+#   FM_SPAWN_SECOND_MATE_RECOVERY=1 is reserved for the session-start liveness
+#   sweep after it proves a recorded secondmate dead or missing; only that path
+#   may replace retained kind=secondmate metadata during a relaunch.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout. With optional
 #   FM_HOST_ROOT set, validation happens before the guard or endpoint mutation;
@@ -558,8 +561,15 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
 fi
 SPAWN_TASK_LOCK_HELD=1
 if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
-  echo "error: task metadata already exists for $ID; reconcile or tear down the retained task before spawning" >&2
-  exit 1
+  if [ "${FM_SPAWN_SECOND_MATE_RECOVERY:-0}" = 1 ] \
+    && [ "$KIND" = secondmate ] \
+    && [ -f "$STATE/$ID.meta" ] \
+    && grep -qx 'kind=secondmate' "$STATE/$ID.meta"; then
+    : # The liveness sweep already proved this exact recorded secondmate recoverable.
+  else
+    echo "error: task metadata already exists for $ID; reconcile or tear down the retained task before spawning" >&2
+    exit 1
+  fi
 fi
 PROJ=
 ARG3=
