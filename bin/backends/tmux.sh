@@ -144,13 +144,13 @@ fm_backend_tmux_canonical_window() {  # <target> -> @<window-id>
 # target disappeared, which would report a killed worker as still present.
 # A readable inventory proves presence/absence; control-plane failures stay unknown.
 fm_backend_tmux_target_state() {  # <target> -> present|absent|unknown
-  local target=$1 out status pane_id window_id named indexed
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
+  local target=$1 out status pane_id window_id named indexed_window indexed_pane
+  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
-    while IFS='|' read -r pane_id window_id named indexed; do
+    while IFS='|' read -r pane_id window_id named indexed_window indexed_pane; do
       case "$target" in
-        "$pane_id"|"$window_id"|"$named"|"$indexed") printf 'present'; return 0 ;;
+        "$pane_id"|"$window_id"|"$named"|"$indexed_window"|"$indexed_pane") printf 'present'; return 0 ;;
       esac
     done <<< "$out"
     printf 'absent'

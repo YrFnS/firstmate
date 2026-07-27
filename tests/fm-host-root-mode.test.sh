@@ -242,8 +242,9 @@ case "${1:-}" in
             "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
           ;;
         *)
-          printf '%%1|@1|%s|%s\n' \
+          printf '%%1|@1|%s|%s|%s\n' \
             "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
+            "${FM_ENDPOINT_INDEX_ALIAS:-test-session:1}" \
             "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
           ;;
       esac
@@ -946,8 +947,8 @@ test_host_teardown_refuses_recorded_overlap_before_mutation() {
   pass "host-root teardown preserves recorded overlaps before endpoint or Git mutation"
 }
 
-test_secondmate_force_teardown_preserves_host_children_on_unconfirmed_stop() {
-  local backend case_root home subhome childproj childwt host fb log current tree_log target out status
+test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup() {
+  local backend case_root home subhome childproj childwt host fb log current tree_log target endpoint_named out status
   for backend in tmux herdr; do
     case_root="$TMP/recursive-host-child-$backend"
     home="$case_root/home"
@@ -962,15 +963,29 @@ test_secondmate_force_teardown_preserves_host_children_on_unconfirmed_stop() {
     fm_write_meta "$home/state/domain.meta" \
       'window=test-session:fm-domain' "worktree=$subhome" "project=$subhome" \
       'harness=echo' 'kind=secondmate' 'mode=secondmate' "home=$subhome" 'projects=alpha'
-    target=test-session:fm-child
-    [ "$backend" != herdr ] || target=child-session:w1:p2
+    target=test-session:1
+    endpoint_named=test-session:fm-child
+    if [ "$backend" = herdr ]; then
+      target=child-session:w1:p2
+      endpoint_named=$target
+    fi
     fm_write_meta "$subhome/state/child.meta" \
       "window=$target" "worktree=$childwt" "project=$childproj" \
       "backend=$backend" "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
     fb=$(make_fakebin "$case_root/fake")
     if [ "$backend" = herdr ]; then
+      printf '%s\n' \
+        'herdr_session=child-session' \
+        'herdr_workspace_id=w1' \
+        'herdr_tab_id=w1:t2' \
+        'herdr_pane_id=w1:p2' >> "$subhome/state/child.meta"
+      printf '%s\n' \
+        'version=1' \
+        'task_id=child' \
+        'projection_id=AbCdEfGhIjKlMnOpQrStUv' > "$subhome/state/child.herdr-presentation"
       cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FAKE_HERDR_LOG"
 case "${1:-} ${2:-}" in
   "status --json") printf '%s\n' '{"server":{"running":true}}' ;;
   "pane close") exit 0 ;;
@@ -990,19 +1005,26 @@ SH
     status=0
     out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
       FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 \
-      FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET="$target" FM_LAUNCH_FILE="$case_root/unused.launch" \
+      FM_TMUX_LOG="$log" FM_FAKE_HERDR_LOG="$log" FM_ENDPOINT_TARGET="$endpoint_named" \
+      FM_ENDPOINT_INDEX_ALIAS="$target" FM_LAUNCH_FILE="$case_root/unused.launch" \
       FM_CURRENT_PATH="$current" FM_TARGET_PATH="$childwt" FM_HOST_PATH="$host" \
       FM_TREEHOUSE_LOG="$tree_log" "$ROOT/bin/fm-teardown.sh" domain --force 2>&1) || status=$?
-    [ "$status" -ne 0 ] || fail "forced secondmate teardown accepted an unconfirmed $backend host-child stop"
-    assert_present "$subhome/state/child.meta" "unconfirmed $backend host-child stop removed child metadata"
-    assert_present "$childwt" "unconfirmed $backend host-child stop removed the child worktree"
-    assert_present "$home/state/domain.meta" "unconfirmed $backend host-child stop removed parent metadata"
+    [ "$status" -ne 0 ] || fail "forced secondmate teardown accepted unsafe $backend host-child cleanup"
+    assert_present "$subhome/state/child.meta" "recursive $backend host-child cleanup removed child metadata"
+    assert_present "$childwt" "recursive $backend host-child cleanup removed the child worktree"
+    assert_present "$home/state/domain.meta" "recursive $backend host-child cleanup removed parent metadata"
     assert_contains "$out" 'refusing destructive cleanup' \
-      "unconfirmed $backend host-child stop did not explain the cleanup refusal"
+      "recursive $backend host-child cleanup did not explain the refusal"
     assert_no_grep 'return --force' "$tree_log" \
-      "unconfirmed $backend host-child stop recycled a worktree"
+      "recursive $backend host-child cleanup recycled a worktree"
+    if [ "$backend" = herdr ]; then
+      assert_present "$subhome/state/child.herdr-presentation" \
+        "recursive Herdr cleanup removed the presentation journal"
+      assert_no_grep 'pane close' "$log" \
+        "recursive Herdr cleanup bypassed direct focus-preserving teardown"
+    fi
   done
-  pass "forced secondmate teardown preserves tmux and Herdr host children until their endpoints are confirmed absent"
+  pass "forced secondmate teardown preserves tmux aliases and projected Herdr children during recursive cleanup"
 }
 
 test_task_actions_use_recorded_host_root() {
@@ -1114,6 +1136,6 @@ test_spawn_rollback_is_transactional
 test_decision_actions_use_durable_host_owner
 test_host_teardown_requires_confirmed_stop
 test_host_teardown_refuses_recorded_overlap_before_mutation
-test_secondmate_force_teardown_preserves_host_children_on_unconfirmed_stop
+test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup
 test_task_actions_use_recorded_host_root
 test_spawn_rejects_old_brief_and_secondmate_clears_roots
