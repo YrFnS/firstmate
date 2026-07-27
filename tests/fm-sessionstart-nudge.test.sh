@@ -48,7 +48,7 @@ make_primary() {
 
 run_nudge() {
   local root=$1
-  FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+  (cd "$root" && FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE")
 }
 
 expect_silent_zero() {
