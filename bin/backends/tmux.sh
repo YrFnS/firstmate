@@ -32,22 +32,22 @@
 # fm-send.sh's and fm-peek.sh's own (until now duplicated) resolve().
 fm_backend_tmux_resolve_bare_selector() {  # <name>
   local name=$1
-  tmux list-windows -a -F '#{session_name}:#{window_name}' | grep -m1 ":$name\$" \
+  fm_tmux_cli list-windows -a -F '#{session_name}:#{window_name}' | grep -m1 ":$name\$" \
     || { echo "error: no window named $name" >&2; return 1; }
 }
 
 # fm_backend_tmux_capture: bounded plain-text pane capture. Mirrors
 # fm-peek.sh's and fm-watch.sh's `tmux capture-pane -p -t "$T" -S -"$N"`.
 fm_backend_tmux_capture() {  # <target> <lines>
-  tmux capture-pane -p -t "$1" -S -"$2"
+  fm_tmux_cli capture-pane -p -t "$1" -S -"$2"
 }
 
 # fm_backend_tmux_send_key: one named key. Mirrors fm-send.sh's --key path:
 # `tmux display-message -p -t "$T" '#{pane_id}' >/dev/null`, then
 # `tmux send-keys -t "$T" "$2"`.
 fm_backend_tmux_send_key() {  # <target> <key>
-  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null
-  tmux send-keys -t "$1" "$2"
+  fm_tmux_cli display-message -p -t "$1" '#{pane_id}' >/dev/null
+  fm_tmux_cli send-keys -t "$1" "$2"
 }
 
 # fm_backend_tmux_send_text_submit: type <text> into <target> once, then
@@ -64,9 +64,9 @@ fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
 # prints the resolved session name.
 fm_backend_tmux_container_ensure() {
   if [ -n "${TMUX:-}" ]; then
-    tmux display-message -p '#S'
+    fm_tmux_cli display-message -p '#S'
   else
-    tmux has-session -t firstmate 2>/dev/null || tmux new-session -d -s firstmate
+    fm_tmux_cli has-session -t firstmate 2>/dev/null || fm_tmux_cli new-session -d -s firstmate
     printf 'firstmate'
   fi
 }
@@ -80,6 +80,24 @@ fm_backend_tmux_task_marker() {
   [ "${#token}" -eq 22 ] || return 1
   case "$token" in *[!A-Za-z0-9_-]*) return 1 ;; esac
   printf 'fm-%s' "$token"
+}
+
+fm_backend_tmux_use_socket() {
+  case "$1" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *$'\n'*|*$'\r'*) return 1 ;;
+  esac
+  FM_BACKEND_TMUX_SOCKET=$1
+}
+
+fm_backend_tmux_socket_path() {
+  local path
+  path=$(fm_tmux_cli display-message -p '#{socket_path}' 2>/dev/null) || return 1
+  fm_backend_tmux_use_socket "$path" || return 1
+  printf '%s' "$path"
 }
 
 # fm_backend_tmux_create_task: create the task's window in <proj-abs>,
@@ -99,17 +117,17 @@ fm_backend_tmux_task_marker() {
 # lost, so worktree discovery cannot fall back to the active client's window.
 fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> [task-marker] -> prints window id
   local ses=$1 wname=$2 proj_abs=$3 marker=${4:-} wid
-  if tmux list-windows -t "$ses" -F '#{window_name}' | grep -qx "$wname"; then
+  if fm_tmux_cli list-windows -t "$ses" -F '#{window_name}' | grep -qx "$wname"; then
     echo "error: window $ses:$wname already exists" >&2
     return 1
   fi
-  wid=$(tmux new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs") || return 1
-  if [ -n "$marker" ] && ! tmux set-window-option -t "$wid" @firstmate_task_marker "$marker" 2>/dev/null; then
-    tmux kill-window -t "$wid" 2>/dev/null || true
+  wid=$(fm_tmux_cli new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs") || return 1
+  if [ -n "$marker" ] && ! fm_tmux_cli set-window-option -t "$wid" @firstmate_task_marker "$marker" 2>/dev/null; then
+    fm_tmux_cli kill-window -t "$wid" 2>/dev/null || true
     return 1
   fi
-  tmux set-window-option -t "$wid" automatic-rename off 2>/dev/null || true
-  tmux set-window-option -t "$wid" allow-rename off 2>/dev/null || true
+  fm_tmux_cli set-window-option -t "$wid" automatic-rename off 2>/dev/null || true
+  fm_tmux_cli set-window-option -t "$wid" allow-rename off 2>/dev/null || true
   printf '%s\n' "$wid"
 }
 
@@ -117,7 +135,7 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> [task-mark
 # empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
 # `tmux display-message -p -t "$T" '#{pane_current_path}'`.
 fm_backend_tmux_current_path() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+  fm_tmux_cli display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
 }
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
@@ -125,7 +143,7 @@ fm_backend_tmux_current_path() {  # <target>
 # (`treehouse get`, the GOTMPDIR export) that already ran this exact sequence
 # inline in fm-spawn.sh. Mirrors `tmux send-keys -t "$T" "<text>" Enter`.
 fm_backend_tmux_send_text_line() {  # <target> <text>
-  tmux send-keys -t "$1" "$2" Enter
+  fm_tmux_cli send-keys -t "$1" "$2" Enter
 }
 
 # fm_backend_tmux_send_literal: send TEXT as literal bytes with no
@@ -133,7 +151,7 @@ fm_backend_tmux_send_text_line() {  # <target> <text>
 # send pauses between the literal send and Enter for the harness to settle).
 # Mirrors `tmux send-keys -t "$T" -l "<text>"`.
 fm_backend_tmux_send_literal() {  # <target> <text>
-  tmux send-keys -t "$1" -l "$2"
+  fm_tmux_cli send-keys -t "$1" -l "$2"
 }
 
 # Resolve any exact tmux handle accepted for a recorded task window to its
@@ -141,7 +159,7 @@ fm_backend_tmux_send_literal() {  # <target> <text>
 # fallback to the active window when a named target has disappeared.
 fm_backend_tmux_canonical_window() {  # <target> [task-marker] -> @<window-id>
   local target=$1 expected_marker=${2:-} out status pane_id window_id named named_pane indexed_window indexed_pane marker matched= named_seen=0
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
+  out=$(fm_tmux_cli list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
     case "$out" in
@@ -184,7 +202,7 @@ fm_backend_tmux_canonical_window() {  # <target> [task-marker] -> @<window-id>
 # A readable inventory proves presence/absence; control-plane failures stay unknown.
 fm_backend_tmux_target_state() {  # <target> [task-marker] -> present|absent|unknown
   local target=$1 expected_marker=${2:-} out status pane_id window_id named indexed_window indexed_pane marker
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
+  out=$(fm_tmux_cli list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
     while IFS='|' read -r pane_id window_id named indexed_window indexed_pane marker; do
@@ -223,7 +241,7 @@ fm_backend_tmux_kill() {  # <target>
   case "$session:$window" in
     :*|*:|*:*:*) return 1 ;;
   esac
-  tmux kill-window -t "=$session:=$window" 2>/dev/null || true
+  fm_tmux_cli kill-window -t "=$session:=$window" 2>/dev/null || true
 }
 
 # fm_backend_tmux_current_command: <target>'s live foreground process name -
@@ -236,7 +254,7 @@ fm_backend_tmux_kill() {  # <target>
 # own name throughout; the value reverts to the shell's own name only once
 # the foreground command actually exits). Empty on any tmux error.
 fm_backend_tmux_current_command() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null
+  fm_tmux_cli display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null
 }
 
 # fm_backend_tmux_classify_process_name: the single owner of the process-name
@@ -354,7 +372,7 @@ fm_backend_tmux_agent_state() {  # <target> [task-marker]
   local foreground argv0s name fg_seen=0 fg_shell=0 fg_other=0
   case "$target" in
     @*)
-      if windows=$(LC_ALL=C tmux list-panes -a -F '#{window_id}|#{@firstmate_task_marker}' 2>&1); then
+      if windows=$(LC_ALL=C fm_tmux_cli list-panes -a -F '#{window_id}|#{@firstmate_task_marker}' 2>&1); then
         inventory_status=0
       else
         inventory_status=$?
@@ -364,7 +382,7 @@ fm_backend_tmux_agent_state() {  # <target> [task-marker]
     *:*)
       session=${target%%:*}
       window=${target#*:}
-      if windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}|#{@firstmate_task_marker}' 2>&1); then
+      if windows=$(LC_ALL=C fm_tmux_cli list-windows -t "$session" -F '#{window_name}|#{@firstmate_task_marker}' 2>&1); then
         inventory_status=0
       else
         inventory_status=$?
@@ -456,7 +474,7 @@ EOF
 # Backward-compatible three-state view for callers that only need a yes/no
 # agent verdict. The detailed state contract is owned by fm_backend_agent_state.
 fm_backend_tmux_agent_alive() {  # <target>
-  case "$(fm_backend_tmux_agent_state "$1")" in
+  case "$(fm_backend_tmux_agent_state "$@")" in
     alive) printf 'alive' ;;
     dead|missing) printf 'dead' ;;
     *) printf 'unknown' ;;
