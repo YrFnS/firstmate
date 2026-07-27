@@ -1148,11 +1148,17 @@ test_adapter_target_state_matrices() {
     . "$1/bin/fm-backend.sh"; fm_backend_source cmux
     fm_backend_cmux_ping_state() { printf ok; }
     fm_backend_cmux_cli() {
-      case "$CASE" in
-        present) printf "%s" "{\"workspaces\":[{\"id\":\"ws-7\"}]}" ;;
-        absent) printf "%s" "{\"workspaces\":[]}" ;;
-        unknown) printf "%s" "not-json" ;;
-      esac
+      if [ "$1" = list-windows ]; then
+        case "$CASE" in
+          present|absent) printf "%s" "[{\"id\":\"window-1\"}]" ;;
+          unknown) printf "%s" "not-json" ;;
+        esac
+      else
+        case "$CASE" in
+          present) printf "%s" "{\"workspaces\":[{\"id\":\"ws-7\"}]}" ;;
+          absent) printf "%s" "{\"workspaces\":[]}" ;;
+        esac
+      fi
     }
     for CASE in present absent unknown; do fm_backend_cmux_target_state ws-7:surface-7; printf " "; done
   ' _ "$ROOT")
@@ -1170,6 +1176,62 @@ test_stop_and_verify_requires_confirmed_absence() {
   expect_code 1 "$status" "a missing endpoint id must refuse destructive cleanup"
   assert_contains "$out" 'missing backend endpoint id' "missing endpoint refusal did not explain the unsafe metadata"
   assert_not_contains "$out" 'called' "missing endpoint refusal invoked a backend kill"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_tmux_canonical_window() { return 2; }
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux session:renamed "" "" 1
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "an unresolved legacy tmux alias must not prove absence"
+  assert_contains "$out" 'could not be resolved to a stable tmux window' \
+    "unresolved legacy tmux alias did not explain the refusal"
+  assert_not_contains "$out" 'called' "unresolved legacy tmux alias invoked a backend kill"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_tmux_canonical_window() { return 2; }
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux session:renamed
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 0 "$status" "unset-mode teardown must preserve legacy missing-alias behavior"
+  [ -z "$out" ] || fail "unset-mode legacy missing alias emitted unexpected output: $out"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_tmux_canonical_window() { return 2; }
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux @7
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 0 "$status" "a missing immutable tmux window id should prove absence"
+  [ -z "$out" ] || fail "missing immutable tmux window id emitted unexpected output: $out"
+
+  status=0
+  bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    tmux() {
+      printf "%s\n" \
+        "%1|@1|session:duplicate|session:duplicate.0|session:1|session:1.0" \
+        "%2|@2|session:duplicate|session:duplicate.0|session:2|session:2.0"
+    }
+    fm_backend_tmux_canonical_window session:duplicate >/dev/null
+  ' _ "$ROOT" || status=$?
+  expect_code 1 "$status" "duplicate tmux names must not resolve to an arbitrary window"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    tmux() {
+      case "$1" in
+        list-panes) printf "@7\n" ;;
+        display-message) printf "codex\n" ;;
+      esac
+    }
+    fm_backend_agent_state tmux @7
+  ' _ "$ROOT")
+  [ "$out" = alive ] || fail "stable tmux window id agent state drifted: '$out'"
 
   status=0
   out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '

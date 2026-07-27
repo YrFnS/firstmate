@@ -917,13 +917,13 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # Tri-state existence probe for destructive cleanup. Unlike the historical
 # boolean liveness helper above, an unreadable control plane is unknown rather
 # than absent and therefore cannot authorize worktree reuse.
-fm_backend_target_state() {  # <backend> <target> [expected-label] -> present|absent|unknown
-  local backend=$1 target=$2 expected_label=${3:-}
+fm_backend_target_state() {  # <backend> <target> [zellij-tab-id] [expected-label] -> present|absent|unknown
+  local backend=$1 target=$2 zellij_tab_id=${3:-} expected_label=${4:-}
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
   case "$backend" in
     tmux) fm_backend_tmux_target_state "$target" ;;
     herdr) fm_backend_herdr_target_state "$target" ;;
-    zellij) fm_backend_zellij_target_state "$target" ;;
+    zellij) fm_backend_zellij_target_state "$target" "$zellij_tab_id" "$expected_label" ;;
     orca) fm_backend_orca_target_state "$target" ;;
     cmux) fm_backend_cmux_target_state "$target" "$expected_label" ;;
     *) printf 'unknown' ;;
@@ -933,15 +933,18 @@ fm_backend_target_state() {  # <backend> <target> [expected-label] -> present|ab
 # Stop a task endpoint and prove it disappeared before any caller recycles or
 # removes the task's worktree. Kill adapters remain idempotent; this stricter
 # owner is for destructive cleanup paths that must not trust best-effort close.
-fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label]
-  local backend=$1 target=$2 expected_label=${4:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
+fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label] [require-stable-tmux-id]
+  local backend=$1 target=$2 expected_label=${4:-} require_stable_tmux_id=${5:-0} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
   [ -n "$target" ] || { echo "error: missing backend endpoint id; refusing destructive cleanup" >&2; return 1; }
   case "$attempts" in ''|*[!0-9]*|0) attempts=20 ;; esac
   if [ "$backend" = tmux ]; then
     fm_backend_source tmux || return 1
     stop_target=$(fm_backend_tmux_canonical_window "$target" 2>/dev/null) || {
       resolve_status=$?
-      [ "$resolve_status" -eq 2 ] && return 0
+      if [ "$resolve_status" -eq 2 ]; then
+        case "$target" in @*) return 0 ;; esac
+        [ "$require_stable_tmux_id" = 1 ] || return 0
+      fi
       echo "error: backend endpoint $target could not be resolved to a stable tmux window; refusing destructive cleanup" >&2
       return 1
     }
@@ -952,7 +955,7 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
     fm_backend_kill "$backend" "$stop_target" "${3:-}" "${4:-}" || return 1
   fi
   while [ "$i" -lt "$attempts" ]; do
-    state=$(fm_backend_target_state "$backend" "$stop_target" "$expected_label")
+    state=$(fm_backend_target_state "$backend" "$stop_target" "${3:-}" "$expected_label")
     [ "$state" = absent ] && return 0
     i=$((i + 1))
     [ "$i" -ge "$attempts" ] || sleep "$delay"

@@ -67,6 +67,38 @@ test_resolution_and_validation() {
   pass "host-root library resolves physical paths and rejects unsafe, harness-specific, or overlapping roots"
 }
 
+test_host_owner_publication_is_atomic() {
+  local dir="$TMP/owner-publication" meta owner out status=0 mode
+  mkdir -p "$dir/fakebin"
+  meta="$dir/task.meta"
+  owner="$dir/host-root"
+  printf 'host_root=%s\n' "$dir/host" > "$meta"
+  cat > "$dir/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$dir/fakebin/mv"
+
+  out=$(PATH="$dir/fakebin:$PATH" bash -c \
+    '. "$1"; fm_host_root_persist_task_owner "$2" "$3"' _ "$LIB" "$meta" "$owner" 2>&1) || status=$?
+  expect_code 2 "$status" "failed host-owner publication must be reported"
+  assert_contains "$out" 'could not persist host owner' "failed host-owner publication was not explicit"
+  assert_absent "$owner" "failed host-owner publication left a partial durable record"
+  [ -z "$(find "$dir" -name 'host-root.tmp.*' -print -quit)" ] \
+    || fail "failed host-owner publication left its temporary file"
+
+  bash -c '. "$1"; fm_host_root_persist_task_owner "$2" "$3"' _ "$LIB" "$meta" "$owner" \
+    || fail "atomic host-owner publication failed"
+  assert_grep "host_root=$dir/host" "$owner" "atomic host-owner publication lost its value"
+  if [ "$(uname -s)" = Darwin ]; then
+    mode=$(stat -f '%Lp' "$owner")
+  else
+    mode=$(stat -c '%a' "$owner")
+  fi
+  [ "$mode" = 600 ] || fail "host-owner publication used mode $mode instead of 600"
+  pass "host-owner publication is atomic and leaves no partial durable record"
+}
+
 test_session_cwd_mismatch_precedes_mutation() {
   local host="$TMP/session-host" home="$TMP/session-home" other="$TMP/session-other" fake_root out status=0
   make_host "$host"; mkdir -p "$home/state" "$home/data" "$home/config" "$other"
@@ -220,7 +252,7 @@ case "${1:-}" in
     case "$*" in
       *'#{pane_current_path}'*) [ -f "$endpoint" ] && cat "$FM_CURRENT_PATH" ;;
       *'#{cursor_y}'*) printf '0\n' ;;
-      *'#{window_id}'*) [ -f "$endpoint" ] && printf '%%1\n' ;;
+      *'#{window_id}'*) [ -f "$endpoint" ] && printf '@1\n' ;;
       *'#{pane_id}'*) [ -f "$endpoint" ] && printf '%%1\n' ;;
       *) printf 'test-session\n' ;;
     esac
@@ -280,7 +312,7 @@ case "${1:-}" in
     fi
     ;;
   has-session|new-session|set-window-option) ;;
-  new-window) : > "$endpoint"; printf '%%1\n' ;;
+  new-window) : > "$endpoint"; printf '@1\n' ;;
   kill-window)
     [ -z "${FM_TMUX_KILL_MUTATION:-}" ] || printf 'late worker edit\n' > "$FM_TMUX_KILL_MUTATION"
     [ "${FM_REFUSE_STOP:-0}" = 1 ] || rm -f "$endpoint"
@@ -336,6 +368,7 @@ test_spawn_separates_roots() {
   meta="$home/state/lane.meta"
   assert_grep "worktree=$wt" "$meta" "spawn meta lost target worktree"
   assert_grep "host_root=$host" "$meta" "spawn meta lost host root"
+  assert_grep 'window=@1' "$meta" "host-root spawn did not persist the immutable tmux window id"
   assert_contains "$(cat "$log")" "FM_TARGET_WORKTREE='$wt'" "child launch did not export exact target worktree"
   assert_contains "$(cat "$log")" "FM_HOST_ROOT='$host'" "child launch did not export exact host root"
   assert_contains "$(cat "$log")" 'notify=[' "Codex FirstMate turn-end safeguard was not retained"
@@ -1066,6 +1099,47 @@ SH
   pass "forced secondmate teardown preserves tmux aliases and projected Herdr children during recursive cleanup"
 }
 
+test_secondmate_force_teardown_refuses_recursive_host_overlap_before_mutation() {
+  local case_root="$TMP/recursive-host-overlap" home subhome childproj host fb log current tree_log out status=0
+  home="$case_root/home"
+  subhome="$case_root/subhome"
+  childproj="$subhome/projects/alpha"
+  host="$case_root/host"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$subhome/state"
+  fm_git_worktree "$childproj" "$host" recursive-overlap
+  : > "$host/AGENTS.md"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  fm_write_meta "$home/state/domain.meta" \
+    'window=test-session:fm-domain' "worktree=$subhome" "project=$subhome" \
+    'harness=echo' 'kind=secondmate' 'mode=secondmate' "home=$subhome" 'projects=alpha'
+  fm_write_meta "$subhome/state/child.meta" \
+    'window=@1' "worktree=$host" "project=$childproj" \
+    "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
+  fb=$(make_fakebin "$case_root/fake")
+  log="$case_root/backend.log"
+  current="$case_root/current"
+  tree_log="$case_root/treehouse.log"
+  printf '%s\n' "$host" > "$current"
+  : > "$current.endpoint"
+  : > "$log"
+  : > "$tree_log"
+
+  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$case_root/unused.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$host" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" \
+    "$ROOT/bin/fm-teardown.sh" domain --force 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "recursive teardown accepted an overlapping child host and target"
+  assert_contains "$out" 'child host and target roots overlap' \
+    "recursive overlap refusal did not explain the unsafe child roots"
+  assert_present "$current.endpoint" "recursive overlap refusal stopped the child endpoint"
+  assert_present "$subhome/state/child.meta" "recursive overlap refusal removed child recovery metadata"
+  assert_present "$home/state/domain.meta" "recursive overlap refusal removed parent recovery metadata"
+  assert_present "$host" "recursive overlap refusal removed the authoritative host"
+  [ ! -s "$log" ] || fail "recursive overlap refusal touched the child endpoint"
+  [ ! -s "$tree_log" ] || fail "recursive overlap refusal invoked treehouse"
+  pass "recursive teardown rejects overlapping child host and target before mutation"
+}
+
 test_task_actions_use_recorded_host_root() {
   local host="$TMP/recorded-host" wrong="$TMP/wrong-host" home="$TMP/recorded-home" fb log current out status=0
   make_host "$host"; make_host "$wrong"; mkdir -p "$home/state" "$home/config"
@@ -1161,6 +1235,7 @@ test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
 }
 
 test_resolution_and_validation
+test_host_owner_publication_is_atomic
 test_session_cwd_mismatch_precedes_mutation
 test_host_command_rendering
 test_brief_variants
@@ -1178,5 +1253,6 @@ test_decision_actions_use_durable_host_owner
 test_host_teardown_requires_confirmed_stop
 test_host_teardown_refuses_recorded_overlap_before_mutation
 test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup
+test_secondmate_force_teardown_refuses_recursive_host_overlap_before_mutation
 test_task_actions_use_recorded_host_root
 test_spawn_rejects_old_brief_and_secondmate_clears_roots
