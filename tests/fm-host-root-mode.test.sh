@@ -946,6 +946,65 @@ test_host_teardown_refuses_recorded_overlap_before_mutation() {
   pass "host-root teardown preserves recorded overlaps before endpoint or Git mutation"
 }
 
+test_secondmate_force_teardown_preserves_host_children_on_unconfirmed_stop() {
+  local backend case_root home subhome childproj childwt host fb log current tree_log target out status
+  for backend in tmux herdr; do
+    case_root="$TMP/recursive-host-child-$backend"
+    home="$case_root/home"
+    subhome="$case_root/subhome"
+    childproj="$subhome/projects/alpha"
+    childwt="$case_root/child-worktree"
+    host="$case_root/host"
+    mkdir -p "$home/state" "$home/data" "$home/config" "$subhome/state" "$host"
+    : > "$host/AGENTS.md"
+    fm_git_worktree "$childproj" "$childwt" "recursive-$backend"
+    printf 'domain\n' > "$subhome/.fm-secondmate-home"
+    fm_write_meta "$home/state/domain.meta" \
+      'window=test-session:fm-domain' "worktree=$subhome" "project=$subhome" \
+      'harness=echo' 'kind=secondmate' 'mode=secondmate' "home=$subhome" 'projects=alpha'
+    target=test-session:fm-child
+    [ "$backend" != herdr ] || target=child-session:w1:p2
+    fm_write_meta "$subhome/state/child.meta" \
+      "window=$target" "worktree=$childwt" "project=$childproj" \
+      "backend=$backend" "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
+    fb=$(make_fakebin "$case_root/fake")
+    if [ "$backend" = herdr ]; then
+      cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "status --json") printf '%s\n' '{"server":{"running":true}}' ;;
+  "pane close") exit 0 ;;
+  "pane get") printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}' ;;
+  *) exit 0 ;;
+esac
+SH
+      chmod +x "$fb/herdr"
+    fi
+    log="$case_root/backend.log"
+    current="$case_root/current"
+    tree_log="$case_root/treehouse.log"
+    printf '%s\n' "$host" > "$current"
+    : > "$current.endpoint"
+    : > "$log"
+    : > "$tree_log"
+    status=0
+    out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+      FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 \
+      FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET="$target" FM_LAUNCH_FILE="$case_root/unused.launch" \
+      FM_CURRENT_PATH="$current" FM_TARGET_PATH="$childwt" FM_HOST_PATH="$host" \
+      FM_TREEHOUSE_LOG="$tree_log" "$ROOT/bin/fm-teardown.sh" domain --force 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "forced secondmate teardown accepted an unconfirmed $backend host-child stop"
+    assert_present "$subhome/state/child.meta" "unconfirmed $backend host-child stop removed child metadata"
+    assert_present "$childwt" "unconfirmed $backend host-child stop removed the child worktree"
+    assert_present "$home/state/domain.meta" "unconfirmed $backend host-child stop removed parent metadata"
+    assert_contains "$out" 'refusing destructive cleanup' \
+      "unconfirmed $backend host-child stop did not explain the cleanup refusal"
+    assert_no_grep 'return --force' "$tree_log" \
+      "unconfirmed $backend host-child stop recycled a worktree"
+  done
+  pass "forced secondmate teardown preserves tmux and Herdr host children until their endpoints are confirmed absent"
+}
+
 test_task_actions_use_recorded_host_root() {
   local host="$TMP/recorded-host" wrong="$TMP/wrong-host" home="$TMP/recorded-home" fb log current out status=0
   make_host "$host"; make_host "$wrong"; mkdir -p "$home/state" "$home/config"
@@ -1055,5 +1114,6 @@ test_spawn_rollback_is_transactional
 test_decision_actions_use_durable_host_owner
 test_host_teardown_requires_confirmed_stop
 test_host_teardown_refuses_recorded_overlap_before_mutation
+test_secondmate_force_teardown_preserves_host_children_on_unconfirmed_stop
 test_task_actions_use_recorded_host_root
 test_spawn_rejects_old_brief_and_secondmate_clears_roots
