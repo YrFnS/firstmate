@@ -740,6 +740,17 @@ test_spawn_rollback_is_transactional() {
   [ ! -s "$log" ] || fail "retained cleanup retry inspected or created an endpoint"
   [ ! -s "$tree_log" ] || fail "retained cleanup retry allocated or returned a worktree"
   cmp -s "$TMP/rollback-retained.meta" "$home/state/rollback-retained.meta" || fail "retained cleanup retry changed the recovery record"
+
+  : > "$log"; : > "$tree_log"; status=0
+  out=$(cd "$host" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-retained-unset-retry.launch" FM_CURRENT_PATH="$current" \
+    FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "unset retry overwrote retained host cleanup metadata"
+  assert_contains "$out" 'task metadata already exists for rollback-retained' "unset retained-host retry refusal was not explicit"
+  [ ! -s "$log" ] || fail "unset retained-host retry inspected or created an endpoint"
+  [ ! -s "$tree_log" ] || fail "unset retained-host retry allocated or returned a worktree"
+  cmp -s "$TMP/rollback-retained.meta" "$home/state/rollback-retained.meta" || fail "unset retry changed the retained host recovery record"
   rm -rf "/tmp/fm-rollback-retained"
   rm -f "$home/state/rollback-retained.meta" "$home/state/rollback-retained.pi-ext.ts"
 
