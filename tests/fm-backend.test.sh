@@ -1161,7 +1161,7 @@ test_stop_and_verify_requires_confirmed_absence() {
     . "$1/bin/fm-backend.sh"; fm_backend_source tmux
     fm_backend_tmux_canonical_window() { return 2; }
     fm_backend_kill() { printf called; }
-    fm_backend_stop_and_verify tmux session:renamed "" "" 1
+    fm_backend_stop_and_verify tmux session:renamed "" "" 1 marker
   ' _ "$ROOT" 2>&1) || status=$?
   expect_code 1 "$status" "an unresolved legacy tmux alias must not prove absence"
   assert_contains "$out" 'could not be resolved to a stable tmux window' \
@@ -1189,6 +1189,29 @@ test_stop_and_verify_requires_confirmed_absence() {
   [ -z "$out" ] || fail "missing immutable tmux window id emitted unexpected output: $out"
 
   status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux @7 "" "" 1
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "host-root teardown must require a task-owned tmux marker"
+  assert_contains "$out" 'has no task-owned tmux window marker' "missing tmux marker refusal was not explicit"
+  assert_not_contains "$out" 'called' "missing tmux marker invoked a backend kill"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    tmux() {
+      printf "%%7|@7|session:task|session:task.0|session:7|session:7.0|other-task\n"
+    }
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux @7 "" "" 1 expected-task
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "host-root teardown trusted a reused tmux window id"
+  assert_contains "$out" 'could not be resolved to a stable tmux window' "reused tmux id refusal was not explicit"
+  assert_not_contains "$out" 'called' "reused tmux id invoked a backend kill"
+
+  status=0
   bash -c '
     . "$1/bin/fm-backend.sh"; fm_backend_source tmux
     tmux() {
@@ -1211,6 +1234,18 @@ test_stop_and_verify_requires_confirmed_absence() {
     fm_backend_agent_state tmux @7
   ' _ "$ROOT")
   [ "$out" = alive ] || fail "stable tmux window id agent state drifted: '$out'"
+
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    tmux() {
+      case "$1" in
+        list-panes) printf "@7|other-task\n" ;;
+        display-message) printf "codex\n" ;;
+      esac
+    }
+    fm_backend_agent_state tmux @7 expected-task
+  ' _ "$ROOT")
+  [ "$out" = unreadable ] || fail "tmux agent state trusted a reused server-local window id: '$out'"
 
   status=0
   out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '

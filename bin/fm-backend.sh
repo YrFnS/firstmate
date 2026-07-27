@@ -531,6 +531,23 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   return 0
 }
 
+fm_backend_assert_recorded_endpoint_identity() {
+  local meta=$1 target marker
+  [ "$(fm_backend_of_meta "$meta")" = tmux ] || return 0
+  grep -q '^host_root=.' "$meta" 2>/dev/null || return 0
+  target=$(fm_backend_target_of_meta "$meta")
+  marker=$(fm_meta_get "$meta" tmux_window_marker)
+  if [ -z "$target" ] || [ -z "$marker" ]; then
+    echo "error: host-root tmux metadata has no task-owned window identity: $meta" >&2
+    return 2
+  fi
+  fm_backend_source tmux || return 2
+  if ! fm_backend_tmux_canonical_window "$target" "$marker" >/dev/null 2>&1; then
+    echo "error: recorded tmux window identity does not match the live endpoint: $target" >&2
+    return 2
+  fi
+}
+
 fm_backend_meta_for_window() {  # <target> <state-dir>
   local target=$1 state=$2 meta window terminal
   for meta in "$state"/*.meta; do
@@ -918,11 +935,11 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # Tri-state existence probe for destructive cleanup. Unlike the historical
 # boolean liveness helper above, an unreadable control plane is unknown rather
 # than absent and therefore cannot authorize worktree reuse.
-fm_backend_target_state() {  # <backend> <target> [zellij-tab-id] [expected-label] -> present|absent|unknown
-  local backend=$1 target=$2 zellij_tab_id=${3:-} expected_label=${4:-}
+fm_backend_target_state() {  # <backend> <target> [zellij-tab-id] [expected-label] [tmux-marker] -> present|absent|unknown
+  local backend=$1 target=$2 zellij_tab_id=${3:-} expected_label=${4:-} tmux_marker=${5:-}
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
   case "$backend" in
-    tmux) fm_backend_tmux_target_state "$target" ;;
+    tmux) fm_backend_tmux_target_state "$target" "$tmux_marker" ;;
     herdr) fm_backend_herdr_target_state "$target" ;;
     zellij) fm_backend_zellij_target_state "$target" "$zellij_tab_id" "$expected_label" ;;
     orca) fm_backend_orca_target_state "$target" ;;
@@ -934,13 +951,17 @@ fm_backend_target_state() {  # <backend> <target> [zellij-tab-id] [expected-labe
 # Stop a task endpoint and prove it disappeared before any caller recycles or
 # removes the task's worktree. Kill adapters remain idempotent; this stricter
 # owner is for destructive cleanup paths that must not trust best-effort close.
-fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label] [require-stable-tmux-id]
-  local backend=$1 target=$2 expected_label=${4:-} require_stable_tmux_id=${5:-0} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
+fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label] [require-stable-tmux-id] [tmux-marker]
+  local backend=$1 target=$2 expected_label=${4:-} require_stable_tmux_id=${5:-0} tmux_marker=${6:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
   [ -n "$target" ] || { echo "error: missing backend endpoint id; refusing destructive cleanup" >&2; return 1; }
   case "$attempts" in ''|*[!0-9]*|0) attempts=20 ;; esac
   if [ "$backend" = tmux ]; then
     fm_backend_source tmux || return 1
-    stop_target=$(fm_backend_tmux_canonical_window "$target" 2>/dev/null) || {
+    if [ "$require_stable_tmux_id" = 1 ] && [ -z "$tmux_marker" ]; then
+      echo "error: backend endpoint $target has no task-owned tmux window marker; refusing destructive cleanup" >&2
+      return 1
+    fi
+    stop_target=$(fm_backend_tmux_canonical_window "$target" "$tmux_marker" 2>/dev/null) || {
       resolve_status=$?
       if [ "$resolve_status" -eq 2 ]; then
         case "$target" in @*) return 0 ;; esac
@@ -956,7 +977,7 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
     fm_backend_kill "$backend" "$stop_target" "${3:-}" "${4:-}" || return 1
   fi
   while [ "$i" -lt "$attempts" ]; do
-    state=$(fm_backend_target_state "$backend" "$stop_target" "${3:-}" "$expected_label")
+    state=$(fm_backend_target_state "$backend" "$stop_target" "${3:-}" "$expected_label" "$tmux_marker")
     [ "$state" = absent ] && return 0
     i=$((i + 1))
     [ "$i" -ge "$attempts" ] || sleep "$delay"
@@ -970,11 +991,11 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
 }
 
 # Implement the recovery-grade state contract described above.
-fm_backend_agent_state() {  # <backend> <target>
-  local backend=$1 target=$2
+fm_backend_agent_state() {  # <backend> <target> [tmux-marker]
+  local backend=$1 target=$2 tmux_marker=${3:-}
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   case "$backend" in
-    tmux) fm_backend_tmux_agent_state "$target" ;;
+    tmux) fm_backend_tmux_agent_state "$target" "$tmux_marker" ;;
     herdr) fm_backend_herdr_agent_state "$target" ;;
     *) printf 'unverified' ;;
   esac
@@ -984,7 +1005,7 @@ fm_backend_agent_state() {  # <backend> <target>
 # authoritatively missing endpoint is confidently not a live agent, while every
 # ambiguous, unreadable, or unverified result stays unknown.
 fm_backend_agent_alive() {  # <backend> <target>
-  case "$(fm_backend_agent_state "$1" "$2")" in
+  case "$(fm_backend_agent_state "$@")" in
     alive) printf 'alive' ;;
     dead|missing) printf 'dead' ;;
     *) printf 'unknown' ;;

@@ -1076,14 +1076,13 @@ test_kill_recovers_stale_target_by_label() {
   local dir fb title
   dir="$TMP_ROOT/kill-stale-target"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
-  # target_ready label recovery: 1 workspace list (title lookup, misses stale id),
-  # 2 workspace list (id-for-label -> refreshed id), 3 list-panes (surface id).
-  cmux_workspace_list_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
-  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
-  cmux_panes_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333"
-  # window_of_workspace on the REFRESHED id: 4 list-windows (not last), 5 workspace list --window.
-  cmux_windows_response "$dir" 4 "eeeeeeee-0000-0000-0000-000000000000" 2
-  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title" "ffffffff-0000-0000-0000-000000000000" "other"
+  cmux_windows_response "$dir" 1 \
+    "eeeeeeee-0000-0000-0000-000000000000" 1 \
+    "eeeeeeee-1111-1111-1111-111111111111" 2
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
+  cmux_workspace_list_response "$dir" 3 \
+    "cccccccc-2222-2222-2222-222222222222" "$title" \
+    "ffffffff-1111-1111-1111-111111111111" "other"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
@@ -1094,7 +1093,9 @@ test_kill_recovers_stale_target_by_label() {
     "kill should not target the stale cmux workspace id after label recovery"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
     "kill should not call close-surface"
-  pass "fm_backend_cmux_kill: recovers stale workspace/surface ids by expected label"
+  assert_contains "$(cat "$dir/log")" $'\x1f''--window'$'\x1f''eeeeeeee-1111-1111-1111-111111111111' \
+    "kill did not scan outside the current cmux window"
+  pass "fm_backend_cmux_kill: recovers and closes a stale target across cmux windows"
 }
 
 # --- list_live: label-based orphan discovery ---------------------------------
@@ -1146,15 +1147,11 @@ test_forced_secondmate_teardown_uses_child_cmux_config() {
     "project=$project" \
     "kind=scout"
   child_title=$(cmux_expected_scoped_title fm-childc "$home" "$home")
-  cmux_workspace_list_response "$dir" 1 ws-child "$child_title" ws-other default
-  cmux_panes_response "$dir" 2 sf-child
-  cmux_workspace_list_response "$dir" 3 ws-child "$child_title" ws-other default
-  cmux_panes_response "$dir" 4 sf-child
-  cmux_windows_response "$dir" 5 win-child 2
-  cmux_workspace_list_response "$dir" 6 ws-child "$child_title" ws-other default
-  : > "$dir/responses/7.out"
-  cmux_windows_response "$dir" 8 win-child 1
-  cmux_workspace_list_response "$dir" 9 ws-other default
+  cmux_windows_response "$dir" 1 win-child 2
+  cmux_workspace_list_response "$dir" 2 ws-child "$child_title" ws-other default
+  : > "$dir/responses/3.out"
+  cmux_windows_response "$dir" 4 win-child 1
+  cmux_workspace_list_response "$dir" 5 ws-other default
   fb=$(make_cmux_fakebin "$dir")
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash

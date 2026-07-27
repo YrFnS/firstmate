@@ -358,6 +358,7 @@ done
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
 if [ "$TARGET_BACKEND" != remote ]; then
   fm_backend_validate "$TARGET_BACKEND" || exit 1
+  [ -z "$TARGET_META" ] || fm_backend_assert_recorded_endpoint_identity "$TARGET_META" || exit $?
 fi
 
 # Classify a from-firstmate -> secondmate request. Only a task selector resolved
