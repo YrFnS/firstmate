@@ -1427,6 +1427,31 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
+test_tmux_missing_socket_is_authoritatively_absent() {
+  local out status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_source tmux
+    fm_tmux_cli() {
+      printf "error connecting to /gone.sock (No such file or directory)\n" >&2
+      return 1
+    }
+    fm_backend_tmux_canonical_window @1 >/dev/null
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 2 "$status" "a vanished recorded tmux socket must prove its window absent: $out"
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_source tmux
+    fm_tmux_cli() {
+      printf "error connecting to /gone.sock (Connection refused)\n" >&2
+      return 1
+    }
+    fm_backend_tmux_target_state @1
+  ' _ "$ROOT")
+  [ "$out" = absent ] || fail "a refused recorded tmux socket stayed unknown: $out"
+  pass "vanished recorded tmux sockets authoritatively prove endpoint absence"
+}
+
 test_backend_name_precedence
 test_backend_detect_precedence
 test_backend_detect_cmux_fallback_bundle_id
@@ -1457,3 +1482,4 @@ test_spawn_refuses_unknown_fm_backend_env
 test_spawn_default_backend_writes_no_meta_field
 test_spawn_explicit_backend_flag_beats_autodetect_herdr_env
 test_spawn_autodetect_nesting_resolves_tmux_silently
+test_tmux_missing_socket_is_authoritatively_absent
