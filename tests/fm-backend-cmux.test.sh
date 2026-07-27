@@ -941,6 +941,40 @@ test_send_text_submit_send_failed_when_target_absent() {
 
 # --- window_of_workspace: which window holds a workspace, and its count ------
 
+test_target_state_scans_every_window() {
+  local dir fb out
+  dir="$TMP_ROOT/target-state-all-windows"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 window-1 1 window-2 1
+  cmux_workspace_list_response "$dir" 2 workspace-other other
+  cmux_workspace_list_response "$dir" 3 workspace-target task
+  fb=$(make_cmux_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_state workspace-target:surface-target' "$ROOT")
+  [ "$out" = present ] || fail "target_state missed a workspace in another cmux window: '$out'"
+  assert_contains "$(cat "$dir/log")" $'\x1f''--window'$'\x1f''window-1' \
+    "target_state did not scan the first cmux window"
+  assert_contains "$(cat "$dir/log")" $'\x1f''--window'$'\x1f''window-2' \
+    "target_state did not scan the second cmux window"
+
+  dir="$TMP_ROOT/target-state-all-windows-absent"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 window-1 1 window-2 1
+  cmux_workspace_list_response "$dir" 2 workspace-one one
+  cmux_workspace_list_response "$dir" 3 workspace-two two
+  fb=$(make_cmux_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_state workspace-target:surface-target' "$ROOT")
+  [ "$out" = absent ] || fail "target_state did not prove absence across every cmux window: '$out'"
+
+  dir="$TMP_ROOT/target-state-window-unreadable"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 window-1 1
+  printf '1\n' > "$dir/responses/2.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_state workspace-target:surface-target' "$ROOT")
+  [ "$out" = unknown ] || fail "target_state treated an unreadable cmux window as absence: '$out'"
+  pass "fm_backend_cmux_target_state scans every window before proving absence"
+}
+
 test_window_of_workspace_finds_window_and_count() {
   local dir fb out
   dir="$TMP_ROOT/win-of-ws"; mkdir -p "$dir/responses"
@@ -1119,7 +1153,8 @@ test_forced_secondmate_teardown_uses_child_cmux_config() {
   cmux_windows_response "$dir" 5 win-child 2
   cmux_workspace_list_response "$dir" 6 ws-child "$child_title" ws-other default
   : > "$dir/responses/7.out"
-  printf '{"workspaces":[]}' > "$dir/responses/8.out"
+  cmux_windows_response "$dir" 8 win-child 1
+  cmux_workspace_list_response "$dir" 9 ws-other default
   fb=$(make_cmux_fakebin "$dir")
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
@@ -1217,6 +1252,7 @@ test_send_text_submit_detects_landed_send
 test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed_when_target_absent
+test_target_state_scans_every_window
 test_window_of_workspace_finds_window_and_count
 test_window_of_workspace_empty_when_not_found
 test_kill_closes_workspace_directly_when_not_last

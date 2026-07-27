@@ -444,30 +444,40 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
 # Tri-state endpoint probe for destructive cleanup. A successful workspace
 # inventory proves presence or absence; socket/auth/JSON failures stay unknown.
 fm_backend_cmux_target_state() {  # <target> [expected-label] -> present|absent|unknown
-  local expected_label=${2:-} expected_title workspaces
+  local expected_label=${2:-} expected_title windows window_ids window_id workspaces
   fm_backend_cmux_parse_target "$1" || { printf 'unknown'; return 0; }
   [ "$(fm_backend_cmux_ping_state)" = ok ] || { printf 'unknown'; return 0; }
-  workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>&1) || {
+  windows=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>&1) || {
     printf 'unknown'
     return 0
   }
-  if ! printf '%s' "$workspaces" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1; then
+  if ! printf '%s' "$windows" | jq -e 'type == "array"' >/dev/null 2>&1; then
     printf 'unknown'
     return 0
   fi
-  if printf '%s' "$workspaces" | jq -e --arg id "$FM_BACKEND_CMUX_WORKSPACE" \
-    'any(.workspaces[]?; .id == $id)' >/dev/null 2>&1; then
-    printf 'present'
-    return 0
-  fi
+  window_ids=$(printf '%s' "$windows" | jq -r '.[]? | .id // empty' 2>/dev/null)
   if [ -n "$expected_label" ]; then
     expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
-    if printf '%s' "$workspaces" | jq -e --arg title "$expected_title" \
-      'any(.workspaces[]?; .title == $title)' >/dev/null 2>&1; then
+  fi
+  while IFS= read -r window_id; do
+    [ -n "$window_id" ] || continue
+    workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$window_id" 2>&1) || {
+      printf 'unknown'
+      return 0
+    }
+    if ! printf '%s' "$workspaces" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1; then
+      printf 'unknown'
+      return 0
+    fi
+    if printf '%s' "$workspaces" | jq -e \
+      --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg title "${expected_title:-}" \
+      'any(.workspaces[]?; .id == $id or ($title != "" and .title == $title))' >/dev/null 2>&1; then
       printf 'present'
       return 0
     fi
-  fi
+  done <<EOF
+$window_ids
+EOF
   printf 'absent'
 }
 
