@@ -531,6 +531,30 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   return 0
 }
 
+fm_backend_supervision_ref_of_meta() {
+  local meta=$1 target task
+  target=$(fm_backend_target_of_meta "$meta")
+  [ -n "$target" ] || return 1
+  if [ "$(fm_backend_of_meta "$meta")" = tmux ] \
+     && grep -q '^host_root=.' "$meta" 2>/dev/null \
+     && [ -n "$(fm_meta_get "$meta" tmux_socket_path)" ]; then
+    task=$(basename "$meta")
+    printf '%s' "${task%.meta}"
+  else
+    printf '%s' "$target"
+  fi
+}
+
+fm_backend_meta_for_supervision_ref() {
+  local ref=$1 state=$2
+  if [ -f "$state/$ref.meta" ] \
+     && [ "$(fm_backend_supervision_ref_of_meta "$state/$ref.meta" 2>/dev/null)" = "$ref" ]; then
+    printf '%s' "$state/$ref.meta"
+    return 0
+  fi
+  fm_backend_meta_for_window "$ref" "$state"
+}
+
 fm_backend_bind_meta_context() {
   local meta=$1 socket
   [ "$(fm_backend_of_meta "$meta")" = tmux ] || return 0
