@@ -231,8 +231,24 @@ case "${1:-}" in
     fi
     ;;
   list-windows) [ -z "${FM_EXISTING_WINDOW:-}" ] || printf '%s\n' "$FM_EXISTING_WINDOW" ;;
-  list-panes) [ ! -f "$endpoint" ] || printf '%%1|@1|%s|%s\n' \
-    "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" "${FM_ENDPOINT_ALIAS:-test-session:1.0}" ;;
+  list-panes)
+    if [ -f "$endpoint" ]; then
+      case "$*" in
+        *'#{window_name}.#{pane_index}'*)
+          printf '%%1|@1|%s|%s|%s|%s\n' \
+            "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
+            "${FM_ENDPOINT_ALIAS:-test-session:fm-rollback-stuck.0}" \
+            "${FM_ENDPOINT_INDEX_ALIAS:-test-session:1}" \
+            "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
+          ;;
+        *)
+          printf '%%1|@1|%s|%s\n' \
+            "${FM_ENDPOINT_TARGET:-test-session:fm-rollback-stuck}" \
+            "${FM_ENDPOINT_INDEX_PANE_ALIAS:-test-session:1.0}"
+          ;;
+      esac
+    fi
+    ;;
   has-session|new-session|set-window-option) ;;
   new-window) : > "$endpoint"; printf '%%1\n' ;;
   kill-window)
@@ -772,14 +788,15 @@ test_spawn_rollback_is_transactional() {
 }
 
 test_decision_actions_use_durable_host_owner() {
-  local host="$TMP/decision-host" home="$TMP/decision-home" id=decision-scout fb owner out status=0
+  local host="$TMP/decision-host" wrong="$TMP/decision-wrong" home="$TMP/decision-home" id=decision-scout action action_id fb owner out status=0 current log tree_log
   make_host "$host"
+  make_host "$wrong"
   mkdir -p "$home/data/$id" "$home/state" "$home/config"
   printf '# Decision report\n' > "$home/data/$id/report.md"
   printf 'done: report complete\n' > "$home/state/$id.status"
   printf 'window=fake:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=scout\n' \
     "$id" "$host" > "$home/state/$id.meta"
-  fb=$(fm_fakebin "$TMP/fake-decision-owner")
+  fb=$(make_fakebin "$TMP/fake-decision-owner")
   cat > "$fb/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
@@ -804,12 +821,54 @@ SH
     "$ROOT/bin/fm-decision-hold.sh" complete "$id" --none 2>&1) || status=$?
   expect_code 1 "$status" "post-metadata completion trusted ambient host authority"
   assert_contains "$out" 'has no durable recorded host owner' "missing durable host owner refusal was not explicit"
-  pass "post-metadata decision actions require durable recorded host ownership"
+
+  current="$TMP/decision.current"
+  log="$TMP/decision.log"
+  tree_log="$TMP/decision-treehouse.log"
+  for action in hold complete resolve; do
+    action_id="decision-post-teardown-$action"
+    mkdir -p "$home/data/$action_id"
+    printf 'window=test-session:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\n' \
+      "$action_id" "$host" > "$home/state/$action_id.meta"
+    printf '%s\n' "$host" > "$current"
+    : > "$current.endpoint"
+    : > "$log"
+    : > "$tree_log"
+    (cd "$host" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+      FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+      FM_ENDPOINT_TARGET="test-session:fm-$action_id" FM_LAUNCH_FILE="$TMP/unused.launch" \
+      FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/decision-target FM_HOST_PATH="$host" \
+      FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-teardown.sh" "$action_id" --force >/dev/null) \
+      || fail "host-root teardown failed before the first post-teardown $action action"
+    assert_absent "$home/state/$action_id.meta" "teardown retained metadata before the $action authority check"
+    assert_grep "host_root=$host" "$home/data/$action_id/host-root" \
+      "teardown did not persist ownership before the $action authority check"
+    status=0
+    case "$action" in
+      hold)
+        out=$(cd "$wrong" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+          "$ROOT/bin/fm-decision-hold.sh" hold "$action_id" choice --title Choice --reason required 2>&1) || status=$?
+        ;;
+      complete)
+        out=$(cd "$wrong" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+          "$ROOT/bin/fm-decision-hold.sh" complete "$action_id" --none 2>&1) || status=$?
+        ;;
+      resolve)
+        out=$(cd "$wrong" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+          "$ROOT/bin/fm-decision-hold.sh" resolve "$action_id" choice \
+            --decision-file "$TMP/missing-decision" --routed-to routed-task 2>&1) || status=$?
+        ;;
+    esac
+    expect_code 2 "$status" "first post-teardown $action action trusted a non-host cwd"
+    assert_contains "$out" 'requires the recorded host root cwd' \
+      "first post-teardown $action action did not enforce durable host ownership"
+  done
+  pass "post-teardown decision actions require durable recorded host ownership"
 }
 
 test_host_teardown_requires_confirmed_stop() {
   local host="$TMP/teardown-host" home="$TMP/teardown-home" project="$TMP/teardown-project" wt="$TMP/teardown-wt" fb log current tree_log out status=0 kill_line verify_line return_line
-  make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; fm_git_init_commit "$project"
+  make_host "$host"; mkdir -p "$home/data/host-teardown" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
   printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\n' \
     "$wt" "$host" "$project" > "$home/state/host-teardown.meta"
@@ -918,6 +977,24 @@ test_task_actions_use_recorded_host_root() {
   expect_code 2 "$status" "send must bind an equivalent tmux pane alias to recorded task ownership"
   assert_contains "$out" 'does not match task metadata host_root' "send alias did not identify recorded host ownership"
   assert_no_grep 'send-keys' "$log" "send alias touched the endpoint before recorded-host validation"
+
+  : > "$log"; status=0
+  out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
+    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
+    FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
+    "$ROOT/bin/fm-peek.sh" test-session:1 2>&1) || status=$?
+  expect_code 2 "$status" "peek must bind a tmux window-index alias to recorded task ownership"
+  assert_contains "$out" 'does not match task metadata host_root' "peek window-index alias lost recorded host ownership"
+  assert_no_grep 'capture-pane' "$log" "peek window-index alias captured the endpoint before recorded-host validation"
+
+  : > "$log"; status=0
+  out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
+    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-lane FM_ENDPOINT_INDEX_ALIAS=test-session:1 \
+    FM_LAUNCH_FILE="$TMP/unused.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH=/tmp/target FM_HOST_PATH="$host" \
+    "$ROOT/bin/fm-send.sh" test-session:1 hello 2>&1) || status=$?
+  expect_code 2 "$status" "send must bind a tmux window-index alias to recorded task ownership"
+  assert_contains "$out" 'does not match task metadata host_root' "send window-index alias lost recorded host ownership"
+  assert_no_grep 'send-keys' "$log" "send window-index alias touched the endpoint before recorded-host validation"
 
   status=0
   out=$(cd "$wrong" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$wrong" \
