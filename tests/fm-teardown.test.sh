@@ -84,9 +84,21 @@ SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 state="${0%/*}/tmux-live"
+if [ "${1:-}" = -S ]; then
+  shift 2
+fi
 case "${1:-}" in
   display-message) [ -f "$state" ] ;;
-  list-panes) [ ! -f "$state" ] || printf '%%1|@1|firstmate:fm-task-x1|firstmate:1.0\n' ;;
+  list-panes)
+    [ ! -f "$state" ] || case "$*" in
+      *'#{window_name}.#{pane_index}'*)
+        printf '%%1|@1|firstmate:fm-task-x1|firstmate:fm-task-x1.0|firstmate:1|firstmate:1.0|teardown-marker\n'
+        ;;
+      *)
+        printf '%%1|@1|firstmate:fm-task-x1|firstmate:1|firstmate:1.0|teardown-marker\n'
+        ;;
+    esac
+    ;;
   kill-window) [ "${FM_FAKE_TMUX_STOP_FAIL:-0}" = 1 ] || rm -f "$state" ;;
   *) exit 0 ;;
 esac
@@ -1295,7 +1307,8 @@ test_unconfirmed_stop_preserves_worktree() {
   host="$case_dir/host"
   mkdir -p "$host"
   : > "$host/AGENTS.md"
-  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
+  printf 'host_root=%s\ntmux_window_marker=teardown-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
+    "$host" >> "$case_dir/state/task-x1.meta"
   tree_log="$case_dir/treehouse.log"
   cat > "$case_dir/fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash

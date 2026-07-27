@@ -1182,7 +1182,7 @@ test_stop_and_verify_requires_confirmed_absence() {
     . "$1/bin/fm-backend.sh"; fm_backend_source tmux
     fm_backend_tmux_canonical_window() { return 2; }
     fm_backend_kill() { printf called; }
-    fm_backend_stop_and_verify tmux session:renamed "" "" 1 marker
+    fm_backend_stop_and_verify tmux session:renamed "" "" 1 marker /owner.sock
   ' _ "$ROOT" 2>&1) || status=$?
   expect_code 1 "$status" "an unresolved legacy tmux alias must not prove absence"
   assert_contains "$out" 'could not be resolved to a stable tmux window' \
@@ -1222,11 +1222,21 @@ test_stop_and_verify_requires_confirmed_absence() {
   status=0
   out=$(bash -c '
     . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify tmux @7 "" "" 1 expected-task
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "host-root teardown must require its creating tmux socket"
+  assert_contains "$out" 'has no creating tmux socket path' "missing tmux socket refusal was not explicit"
+  assert_not_contains "$out" 'called' "missing tmux socket invoked a backend kill"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
     tmux() {
       printf "%%7|@7|session:task|session:task.0|session:7|session:7.0|other-task\n"
     }
     fm_backend_kill() { printf called; }
-    fm_backend_stop_and_verify tmux @7 "" "" 1 expected-task
+    fm_backend_stop_and_verify tmux @7 "" "" 1 expected-task /owner.sock
   ' _ "$ROOT" 2>&1) || status=$?
   expect_code 1 "$status" "host-root teardown trusted a reused tmux window id"
   assert_contains "$out" 'could not be resolved to a stable tmux window' "reused tmux id refusal was not explicit"
@@ -1259,14 +1269,46 @@ test_stop_and_verify_requires_confirmed_absence() {
   out=$(bash -c '
     . "$1/bin/fm-backend.sh"; fm_backend_source tmux
     tmux() {
+      [ "${1:-}" != -S ] || shift 2
       case "$1" in
         list-panes) printf "@7|other-task\n" ;;
         display-message) printf "codex\n" ;;
       esac
     }
-    fm_backend_agent_state tmux @7 expected-task
+    fm_backend_agent_state tmux @7 expected-task /owner.sock
   ' _ "$ROOT")
   [ "$out" = unreadable ] || fail "tmux agent state trusted a reused server-local window id: '$out'"
+
+  local socket_dir="$TMP_ROOT/tmux-owner-socket"
+  mkdir -p "$socket_dir"
+  status=0
+  out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    tmux() {
+      local socket=ambient
+      if [ "${1:-}" = -S ]; then
+        socket=$2
+        shift 2
+      fi
+      { printf "%s" "$socket"; for arg in "$@"; do printf "\037%s" "$arg"; done; printf "\n"; } >> "$FM_SOCKET_TEST_LOG"
+      case "$1" in
+        list-panes)
+          if [ "$socket" = /owner.sock ] && [ ! -e "$FM_SOCKET_TEST_STOPPED" ]; then
+            case "$*" in
+              *"#{pane_id}"*) printf "%%7|@7|session:task|session:task.0|session:7|session:7.0|expected-task\n" ;;
+              *) printf "@7|expected-task\n" ;;
+            esac
+          fi
+          ;;
+        kill-window) : > "$FM_SOCKET_TEST_STOPPED" ;;
+      esac
+    }
+    export FM_SOCKET_TEST_LOG=$2 FM_SOCKET_TEST_STOPPED=$3
+    fm_backend_stop_and_verify tmux @7 "" "" 1 expected-task /owner.sock
+  ' _ "$ROOT" "$socket_dir/log" "$socket_dir/stopped" 2>&1) || status=$?
+  expect_code 0 "$status" "host-root teardown did not use the creating tmux socket: $out"
+  assert_present "$socket_dir/stopped" "creating-socket teardown left the owning tmux window alive"
+  assert_no_grep '^ambient' "$socket_dir/log" "creating-socket teardown consulted ambient tmux"
 
   status=0
   out=$(FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 bash -c '

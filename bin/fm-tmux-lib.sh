@@ -66,6 +66,14 @@
 # shellcheck source=bin/fm-composer-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-composer-lib.sh"
 
+fm_tmux_cli() {
+  if [ -n "${FM_BACKEND_TMUX_SOCKET:-}" ]; then
+    tmux -S "$FM_BACKEND_TMUX_SOCKET" "$@"
+  else
+    tmux "$@"
+  fi
+}
+
 # Delivery-only rendered busy footers per harness. claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel".
 # Claude's current spinner has a rotating glyph and word, but every active-turn
@@ -316,9 +324,9 @@ EOF
 fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   local target=$1 cy raw pane plain box box_status top bottom geometry_ambiguous
   local row row_raw state unknown_seen=0
-  cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
+  cy=$(fm_tmux_cli display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
-  pane=$(tmux capture-pane -e -p -t "$target" -S 0 -E - 2>/dev/null) || { printf 'unknown'; return 0; }
+  pane=$(fm_tmux_cli capture-pane -e -p -t "$target" -S 0 -E - 2>/dev/null) || { printf 'unknown'; return 0; }
   plain=$(printf '%s\n' "$pane" | fm_composer_strip_ansi)
   if box=$(fm_tmux_find_composer_box "$cy" "$plain"); then
     top=${box%% *}
@@ -355,7 +363,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
       return 0
     fi
   fi
-  raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) \
+  raw=$(fm_tmux_cli capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) \
     || { printf 'unknown'; return 0; }
   if fm_tmux_row_has_composer_edge "$(printf '%s\n' "$raw" | fm_composer_strip_ansi)"; then
     printf 'unknown'
@@ -374,7 +382,7 @@ fm_pane_input_pending() {  # <target>
 # (an agent mid-turn). Scans a 40-line tail like fm-watch.sh.
 fm_pane_is_busy() {  # <target> [harness]
   local win=$1 harness=${2:-} tail40
-  tail40=$(tmux capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
+  tail40=$(fm_tmux_cli capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
     | fm_busy_lines_match "$harness"
 }
@@ -395,7 +403,7 @@ fm_pane_is_busy() {  # <target> [harness]
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
   local target=$1 retries=$2 sleep_s=$3 i=0 state
   while :; do
-    tmux send-keys -t "$target" Enter 2>/dev/null || true
+    fm_tmux_cli send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
     state=$(fm_tmux_composer_state "$target")
     case "$state" in
@@ -423,7 +431,7 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
 
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5
-  tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
+  fm_tmux_cli send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
 }

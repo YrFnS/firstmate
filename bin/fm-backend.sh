@@ -531,6 +531,25 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   return 0
 }
 
+fm_backend_bind_meta_context() {
+  local meta=$1 socket
+  [ "$(fm_backend_of_meta "$meta")" = tmux ] || return 0
+  socket=$(fm_meta_get "$meta" tmux_socket_path)
+  if grep -q '^host_root=.' "$meta" 2>/dev/null && [ -z "$socket" ]; then
+    echo "error: host-root tmux metadata has no creating socket path: $meta" >&2
+    return 2
+  fi
+  if [ -z "$socket" ]; then
+    unset FM_BACKEND_TMUX_SOCKET
+    return 0
+  fi
+  fm_backend_source tmux || return 2
+  fm_backend_tmux_use_socket "$socket" || {
+    echo "error: host-root tmux metadata has an invalid creating socket path: $meta" >&2
+    return 2
+  }
+}
+
 fm_backend_assert_recorded_endpoint_identity() {
   local meta=$1 target marker
   [ "$(fm_backend_of_meta "$meta")" = tmux ] || return 0
@@ -541,7 +560,7 @@ fm_backend_assert_recorded_endpoint_identity() {
     echo "error: host-root tmux metadata has no task-owned window identity: $meta" >&2
     return 2
   fi
-  fm_backend_source tmux || return 2
+  fm_backend_bind_meta_context "$meta" || return $?
   if ! fm_backend_tmux_canonical_window "$target" "$marker" >/dev/null 2>&1; then
     echo "error: recorded tmux window identity does not match the live endpoint: $target" >&2
     return 2
@@ -549,55 +568,59 @@ fm_backend_assert_recorded_endpoint_identity() {
 }
 
 fm_backend_meta_for_window() {  # <target> <state-dir>
-  local target=$1 state=$2 meta window terminal
+  local target=$1 state=$2 meta window terminal matched=
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     window=$(fm_meta_get "$meta" window)
     terminal=$(fm_meta_get "$meta" terminal)
     { [ -n "$window" ] && [ "$window" = "$target" ]; } || { [ -n "$terminal" ] && [ "$terminal" = "$target" ]; } || continue
-    printf '%s' "$meta"
-    return 0
+    [ -z "$matched" ] || return 2
+    matched=$meta
   done
-  return 1
+  [ -n "$matched" ] || return 1
+  printf '%s' "$matched"
 }
 
 # Match an exact recorded target first, then recognize equivalent explicit tmux
 # handles by their inventory-backed window id. Bare names remain on the legacy
 # resolver because they can be ambiguous across sessions.
 fm_backend_meta_for_target() {  # <target> <state-dir>
-  local target=$1 state=$2 meta canonical recorded recorded_canonical host_meta=0
-  meta=$(fm_backend_meta_for_window "$target" "$state" 2>/dev/null || true)
-  if [ -n "$meta" ]; then
+  local target=$1 state=$2 meta canonical recorded recorded_canonical socket marker matched= status
+  local FM_BACKEND_TMUX_SOCKET=
+  if meta=$(fm_backend_meta_for_window "$target" "$state" 2>/dev/null); then
     printf '%s' "$meta"
     return 0
+  else
+    status=$?
   fi
+  [ "$status" -ne 2 ] || return 2
   case "$target" in
     *:*:*) return 1 ;; # Herdr uses session:workspace:pane and is never a tmux alias.
     *:*|%*|@*) ;;
     *) return 1 ;;
   esac
-  for meta in "$state"/*.meta; do
-    [ -e "$meta" ] || continue
-    [ "$(fm_backend_of_meta "$meta")" = tmux ] || continue
-    grep -q '^host_root=.' "$meta" 2>/dev/null || continue
-    host_meta=1
-    break
-  done
-  [ "$host_meta" = 1 ] || return 1
   fm_backend_source tmux >/dev/null 2>&1 || return 1
-  canonical=$(fm_backend_tmux_canonical_window "$target" 2>/dev/null) || return 1
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     [ "$(fm_backend_of_meta "$meta")" = tmux ] || continue
     grep -q '^host_root=.' "$meta" 2>/dev/null || continue
+    socket=$(fm_meta_get "$meta" tmux_socket_path)
+    marker=$(fm_meta_get "$meta" tmux_window_marker)
+    if [ -n "$socket" ] && [ -n "$marker" ]; then
+      fm_backend_tmux_use_socket "$socket" || continue
+    else
+      FM_BACKEND_TMUX_SOCKET=
+    fi
+    canonical=$(fm_backend_tmux_canonical_window "$target" 2>/dev/null) || continue
     recorded=$(fm_backend_target_of_meta "$meta")
     [ -n "$recorded" ] || continue
-    recorded_canonical=$(fm_backend_tmux_canonical_window "$recorded" 2>/dev/null) || continue
+    recorded_canonical=$(fm_backend_tmux_canonical_window "$recorded" "$marker" 2>/dev/null) || continue
     [ "$recorded_canonical" = "$canonical" ] || continue
-    printf '%s' "$meta"
-    return 0
+    [ -z "$matched" ] || return 2
+    matched=$meta
   done
-  return 1
+  [ -n "$matched" ] || return 1
+  printf '%s' "$matched"
 }
 
 fm_backend_task_id_for_selector() {  # <raw-target> <state-dir>
@@ -704,10 +727,19 @@ fm_backend_source() {  # <name>
 #   anything else      treated as an ad hoc bare window name and resolved by
 #                      searching the legacy tmux live inventory.
 fm_backend_resolve_selector() {  # <raw-target> <state-dir>
-  local raw=$1 state=$2 meta window
+  local raw=$1 state=$2 meta window status
   meta=$(fm_backend_meta_for_selector "$raw" "$state" 2>/dev/null || true)
   if [ -z "$meta" ]; then
-    meta=$(fm_backend_meta_for_target "$raw" "$state" 2>/dev/null || true)
+    if meta=$(fm_backend_meta_for_target "$raw" "$state" 2>/dev/null); then
+      :
+    else
+      status=$?
+      [ "$status" -ne 2 ] || {
+        echo "error: backend target '$raw' matches multiple task records" >&2
+        return 2
+      }
+      meta=
+    fi
   fi
   if [ -n "$meta" ]; then
     window=$(fm_backend_target_of_meta "$meta")
@@ -881,7 +913,8 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 expected_label=${3:-} session pane
   case "$backend" in
     tmux)
-      tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
+      fm_backend_source tmux || return 1
+      fm_tmux_cli display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
       ;;
     herdr)
       fm_backend_source herdr || return 1
@@ -950,8 +983,9 @@ fm_backend_target_state() {  # <backend> <target> [zellij-tab-id] [expected-labe
 # Stop a task endpoint and prove it disappeared before any caller recycles or
 # removes the task's worktree. Kill adapters remain idempotent; this stricter
 # owner is for destructive cleanup paths that must not trust best-effort close.
-fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label] [require-stable-tmux-id] [tmux-marker]
-  local backend=$1 target=$2 expected_label=${4:-} require_stable_tmux_id=${5:-0} tmux_marker=${6:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
+fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label] [require-stable-tmux-id] [tmux-marker] [tmux-socket-path]
+  local backend=$1 target=$2 expected_label=${4:-} require_stable_tmux_id=${5:-0} tmux_marker=${6:-} tmux_socket=${7:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
+  local FM_BACKEND_TMUX_SOCKET=
   [ -n "$target" ] || { echo "error: missing backend endpoint id; refusing destructive cleanup" >&2; return 1; }
   case "$attempts" in ''|*[!0-9]*|0) attempts=20 ;; esac
   if [ "$backend" = tmux ]; then
@@ -960,6 +994,14 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
       echo "error: backend endpoint $target has no task-owned tmux window marker; refusing destructive cleanup" >&2
       return 1
     fi
+    if [ "$require_stable_tmux_id" = 1 ] && [ -z "$tmux_socket" ]; then
+      echo "error: backend endpoint $target has no creating tmux socket path; refusing destructive cleanup" >&2
+      return 1
+    fi
+    [ -z "$tmux_socket" ] || fm_backend_tmux_use_socket "$tmux_socket" || {
+      echo "error: backend endpoint $target has an invalid creating tmux socket path; refusing destructive cleanup" >&2
+      return 1
+    }
     stop_target=$(fm_backend_tmux_canonical_window "$target" "$tmux_marker" 2>/dev/null) || {
       resolve_status=$?
       if [ "$resolve_status" -eq 2 ]; then
@@ -990,11 +1032,19 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
 }
 
 # Implement the recovery-grade state contract described above.
-fm_backend_agent_state() {  # <backend> <target> [tmux-marker]
-  local backend=$1 target=$2 tmux_marker=${3:-}
+fm_backend_agent_state() {  # <backend> <target> [tmux-marker] [tmux-socket-path]
+  local backend=$1 target=$2 tmux_marker=${3:-} tmux_socket=${4:-}
+  local FM_BACKEND_TMUX_SOCKET=
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   case "$backend" in
-    tmux) fm_backend_tmux_agent_state "$target" "$tmux_marker" ;;
+    tmux)
+      if { [ -n "$tmux_marker" ] && [ -z "$tmux_socket" ]; } \
+         || { [ -n "$tmux_socket" ] && ! fm_backend_tmux_use_socket "$tmux_socket"; }; then
+        printf 'unreadable'
+      else
+        fm_backend_tmux_agent_state "$target" "$tmux_marker"
+      fi
+      ;;
     herdr) fm_backend_herdr_agent_state "$target" ;;
     *) printf 'unverified' ;;
   esac

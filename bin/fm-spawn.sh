@@ -385,6 +385,8 @@ CONFIG_INHERIT_LOCK_HELD=0
 CMUX_WORKSPACE_ID=
 CMUX_SURFACE_ID=
 TMUX_WINDOW_MARKER=
+TMUX_SOCKET_PATH=
+FM_BACKEND_TMUX_SOCKET=
 
 parse_orca_worktree_result() {
   local raw=$1 rest
@@ -455,6 +457,7 @@ write_abort_meta() {
     [ -z "${CMUX_WORKSPACE_ID:-}" ] || echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
     [ -z "${CMUX_SURFACE_ID:-}" ] || echo "cmux_surface_id=$CMUX_SURFACE_ID"
     [ -z "${TMUX_WINDOW_MARKER:-}" ] || echo "tmux_window_marker=$TMUX_WINDOW_MARKER"
+    [ -z "${TMUX_SOCKET_PATH:-}" ] || echo "tmux_socket_path=$TMUX_SOCKET_PATH"
   } > "$STATE/$ID.meta" 2>/dev/null || true
 }
 
@@ -525,7 +528,7 @@ spawn_abort_cleanup() {
       # recycle a worktree while endpoint absence is unknown.
       cleanup_failed=1
       endpoint_stopped=0
-    elif [ -n "${T:-}" ] && ! fm_backend_stop_and_verify "$BACKEND" "$T" "${ZELLIJ_TAB_ID:-}" "${W:-fm-$ID}" "$HOST_MODE" "${TMUX_WINDOW_MARKER:-}"; then
+    elif [ -n "${T:-}" ] && ! fm_backend_stop_and_verify "$BACKEND" "$T" "${ZELLIJ_TAB_ID:-}" "${W:-fm-$ID}" "$HOST_MODE" "${TMUX_WINDOW_MARKER:-}" "${TMUX_SOCKET_PATH:-}"; then
       cleanup_failed=1
       endpoint_stopped=0
     fi
@@ -1279,12 +1282,18 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
         ;;
     esac
   fi
-  if [ "$old_backend" = tmux ] && grep -q '^host_root=.' "$meta" 2>/dev/null \
-     && [ -z "$(fm_meta_get "$meta" tmux_window_marker)" ]; then
-    echo "error: existing host-root tmux metadata for $ID has no task-owned window identity; refusing duplicate launch" >&2
-    return 1
+  if [ "$old_backend" = tmux ] && grep -q '^host_root=.' "$meta" 2>/dev/null; then
+    if [ -z "$(fm_meta_get "$meta" tmux_window_marker)" ]; then
+      echo "error: existing host-root tmux metadata for $ID has no task-owned window identity; refusing duplicate launch" >&2
+      return 1
+    fi
+    if [ -z "$(fm_meta_get "$meta" tmux_socket_path)" ]; then
+      echo "error: existing host-root tmux metadata for $ID has no creating socket path; refusing duplicate launch" >&2
+      return 1
+    fi
   fi
-  old_state=$(fm_backend_agent_alive "$old_backend" "$old_target" "$(fm_meta_get "$meta" tmux_window_marker)")
+  old_state=$(fm_backend_agent_alive "$old_backend" "$old_target" \
+    "$(fm_meta_get "$meta" tmux_window_marker)" "$(fm_meta_get "$meta" tmux_socket_path)")
   case "$old_state" in
     dead) return 0 ;;
     alive|unknown)
@@ -1304,7 +1313,14 @@ case "$BACKEND" in
     # non-default tmux config cannot rename the window away from fm-<id> once
     # treehouse cd's into the worktree. WT_TARGET carries that stable id for the
     # rename-critical worktree-detection steps below.
-    [ "$HOST_MODE" -eq 0 ] || TMUX_WINDOW_MARKER=$(fm_backend_tmux_task_marker) || exit 1
+    if [ "$HOST_MODE" -eq 1 ]; then
+      TMUX_WINDOW_MARKER=$(fm_backend_tmux_task_marker) || exit 1
+      TMUX_SOCKET_PATH=$(fm_backend_tmux_socket_path) || {
+        echo "error: could not resolve the creating tmux socket path" >&2
+        exit 1
+      }
+      fm_backend_tmux_use_socket "$TMUX_SOCKET_PATH" || exit 1
+    fi
     WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS" "$TMUX_WINDOW_MARKER") || exit 1
     WT_TARGET="$WID"
     [ "$HOST_MODE" -eq 0 ] || T=$WID
@@ -2005,6 +2021,7 @@ META_WINDOW=$T
   # data/fm-backend-design-d7's P1 compatibility contract).
   [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
   [ -z "$TMUX_WINDOW_MARKER" ] || echo "tmux_window_marker=$TMUX_WINDOW_MARKER"
+  [ -z "$TMUX_SOCKET_PATH" ] || echo "tmux_socket_path=$TMUX_SOCKET_PATH"
   if [ "$BACKEND" = herdr ]; then
     echo "herdr_session=$HERDR_SES"
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
