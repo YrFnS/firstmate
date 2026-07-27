@@ -394,8 +394,8 @@ fm_backend_zellij_target_ready() {  # <target> [expected-label]
 # Tri-state endpoint probe for destructive cleanup. Zellij action exit codes
 # cannot prove absence, so first require a readable session list and then parse
 # the pane list structurally; malformed or unreachable output stays unknown.
-fm_backend_zellij_target_state() {  # <target> -> present|absent|unknown
-  local sessions status panes
+fm_backend_zellij_target_state() {  # <target> [tab-id] [expected-label] -> present|absent|unknown
+  local recorded_tab=${2:-} expected_label=${3:-} sessions status panes tabs scoped
   fm_backend_zellij_parse_target "$1" || { printf 'unknown'; return 0; }
   sessions=$(zellij list-sessions --short --no-formatting 2>&1)
   status=$?
@@ -418,9 +418,32 @@ fm_backend_zellij_target_state() {  # <target> -> present|absent|unknown
   if printf '%s' "$panes" | jq -e --arg pane "$FM_BACKEND_ZELLIJ_PANE" \
     '[.[]? | select((.id | tostring) == $pane and .is_plugin == false)] | length > 0' >/dev/null 2>&1; then
     printf 'present'
-  else
-    printf 'absent'
+    return 0
   fi
+  [ -n "$recorded_tab" ] || [ -n "$expected_label" ] || {
+    printf 'absent'
+    return 0
+  }
+  tabs=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-tabs --json 2>&1)
+  if ! printf '%s' "$tabs" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf 'unknown'
+    return 0
+  fi
+  if [ -n "$recorded_tab" ] \
+     && printf '%s' "$tabs" | jq -e --arg tab "$recorded_tab" \
+       'any(.[]?; (.tab_id | tostring) == $tab)' >/dev/null 2>&1; then
+    printf 'present'
+    return 0
+  fi
+  if [ -n "$expected_label" ]; then
+    scoped=$(fm_backend_zellij_scoped_title "$expected_label")
+    if printf '%s' "$tabs" | jq -e --arg scoped "$scoped" --arg legacy "$expected_label" \
+      'any(.[]?; .name == $scoped or .name == $legacy)' >/dev/null 2>&1; then
+      printf 'present'
+      return 0
+    fi
+  fi
+  printf 'absent'
 }
 
 # fm_backend_zellij_current_path: the live pane's cwd, or empty on any error.
@@ -563,8 +586,8 @@ fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep
   done
 }
 
-# fm_backend_zellij_kill: remove the task's tab, best-effort (mirrors
-# tmux-kill-window's/herdr-pane-close's `|| true` contract). Verified: unlike
+# fm_backend_zellij_kill: remove the task's tab idempotently while propagating
+# a close failure to callers that require verified teardown. Verified: unlike
 # herdr, closing a zellij tab's only PANE does NOT close the tab itself (an
 # empty tab survives in list-tabs); `close-tab-by-id` on a live tab DOES
 # cleanly remove both the pane and the tab in one call, verified to need no
@@ -591,7 +614,7 @@ fm_backend_zellij_kill() {  # <target> [tab_id] [expected_label]
       ;;
   esac
   if [ -n "$tab_id" ]; then
-    fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action close-tab-by-id "$tab_id" >/dev/null 2>&1 || true
+    fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action close-tab-by-id "$tab_id" >/dev/null 2>&1
   elif [ -z "$expected_label" ]; then
     fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action close-pane --pane-id "$FM_BACKEND_ZELLIJ_PANE" >/dev/null 2>&1 || true
   fi

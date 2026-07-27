@@ -1207,10 +1207,10 @@ case "$BACKEND" in
     # id and pins the window name (automatic-rename/allow-rename off) so a captain's
     # non-default tmux config cannot rename the window away from fm-<id> once
     # treehouse cd's into the worktree. WT_TARGET carries that stable id for the
-    # rename-critical worktree-detection steps below; the persisted window= handle
-    # stays $T (the name form), which is safe now that rename is disabled.
+    # rename-critical worktree-detection steps below.
     WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
     WT_TARGET="$WID"
+    [ "$HOST_MODE" -eq 0 ] || T=$WID
     ;;
   herdr)
     # fm_backend_herdr_workspace_label resolves the target workspace from

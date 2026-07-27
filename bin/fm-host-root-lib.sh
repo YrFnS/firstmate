@@ -103,7 +103,7 @@ fm_host_root_assert_task_cwd() {
 }
 
 fm_host_root_persist_task_owner() {
-  local meta=$1 owner=$2 recorded
+  local meta=$1 owner=$2 recorded tmp
   recorded=$(sed -n 's/^host_root=//p' "$meta" 2>/dev/null | tail -1)
   [ -n "$recorded" ] || return 0
   if [ -e "$owner" ] || [ -L "$owner" ]; then
@@ -117,10 +117,17 @@ fm_host_root_persist_task_owner() {
     }
     return 0
   fi
-  (umask 077; printf 'host_root=%s\n' "$recorded" > "$owner") || {
+  tmp=$(umask 077; mktemp "$owner.tmp.XXXXXX" 2>/dev/null) || {
     echo "error: could not persist host owner: $owner" >&2
     return 2
   }
+  if ! printf 'host_root=%s\n' "$recorded" > "$tmp" \
+     || ! chmod 0600 "$tmp" 2>/dev/null \
+     || ! mv -f -- "$tmp" "$owner" 2>/dev/null; then
+    rm -f -- "$tmp"
+    echo "error: could not persist host owner: $owner" >&2
+    return 2
+  fi
 }
 
 fm_host_root_paths_overlap() {
