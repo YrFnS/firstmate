@@ -1435,7 +1435,7 @@ cleanup_firstmate_home_children() {
       return 1
     elif [ "$child_host_mode" -eq 1 ]; then
       ( unset FM_ROOT_OVERRIDE FM_CONFIG_OVERRIDE; FM_HOME=$home FM_ROOT=$home \
-        fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 1 ) || return 1
+        fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 1 "$(meta_value "$child_meta" tmux_window_marker)" ) || return 1
     elif [ -n "$child_t" ]; then
       case "$child_backend" in
         herdr)
@@ -1643,7 +1643,7 @@ fi
 stop_task_endpoint_and_verify() {
   local close_status=0 endpoint_state
   if [ "$BACKEND" != herdr ]; then
-    fm_backend_stop_and_verify "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" "$TASK_HOST_MODE"
+    fm_backend_stop_and_verify "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" "$TASK_HOST_MODE" "$(meta_value "$META" tmux_window_marker)"
     return
   fi
   if ! teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then

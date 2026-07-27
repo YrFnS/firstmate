@@ -389,6 +389,50 @@ fm_backend_cmux_parse_target() {  # <target>
   [ -n "$FM_BACKEND_CMUX_WORKSPACE" ] && [ -n "$FM_BACKEND_CMUX_SURFACE" ] && [ "$FM_BACKEND_CMUX_SURFACE" != "$target" ]
 }
 
+fm_backend_cmux_workspace_across_windows() {  # <workspace_id> [expected-title] -> "<workspace_id>\t<window_id>\t<count>"
+  local wsid=$1 expected_title=${2:-} wins window_ids window_id workspaces count
+  local current_id title id_match= label_match= id_count=0 label_count=0 id_conflict=0
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>&1) || return 1
+  printf '%s' "$wins" | jq -e 'type == "array" and all(.[]?; .id | type == "string")' >/dev/null 2>&1 || return 1
+  window_ids=$(printf '%s' "$wins" | jq -r '.[].id' 2>/dev/null) || return 1
+  while IFS= read -r window_id; do
+    [ -n "$window_id" ] || continue
+    workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$window_id" 2>&1) || return 1
+    printf '%s' "$workspaces" | jq -e '
+      (.workspaces | type == "array")
+      and all(.workspaces[]?; (.id | type == "string") and ((.title // "") | type == "string"))
+    ' >/dev/null 2>&1 || return 1
+    count=$(printf '%s' "$workspaces" | jq -r '.workspaces | length' 2>/dev/null) || return 1
+    while IFS=$'\t' read -r current_id title; do
+      [ -n "$current_id" ] || continue
+      if [ "$current_id" = "$wsid" ]; then
+        id_count=$((id_count + 1))
+        if [ -n "$expected_title" ] && [ "$title" != "$expected_title" ]; then
+          id_conflict=1
+        else
+          id_match=$(printf '%s\t%s\t%s' "$current_id" "$window_id" "$count")
+        fi
+      fi
+      if [ -n "$expected_title" ] && [ "$title" = "$expected_title" ]; then
+        label_count=$((label_count + 1))
+        label_match=$(printf '%s\t%s\t%s' "$current_id" "$window_id" "$count")
+      fi
+    done < <(printf '%s' "$workspaces" | jq -r '.workspaces[]? | [.id, (.title // "")] | @tsv' 2>/dev/null)
+  done <<EOF
+$window_ids
+EOF
+  [ "$id_count" -le 1 ] && [ "$label_count" -le 1 ] && [ "$id_conflict" -eq 0 ] || return 1
+  if [ -n "$id_match" ]; then
+    printf '%s' "$id_match"
+    return 0
+  fi
+  if [ -n "$label_match" ]; then
+    printf '%s' "$label_match"
+    return 0
+  fi
+  return 2
+}
+
 # fm_backend_cmux_surface_exists: does <surface_id> currently appear as one of
 # <workspace_id>'s surfaces, per list-panes? Structural existence check, never
 # a content read.
@@ -444,41 +488,19 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
 # Tri-state endpoint probe for destructive cleanup. A successful workspace
 # inventory proves presence or absence; socket/auth/JSON failures stay unknown.
 fm_backend_cmux_target_state() {  # <target> [expected-label] -> present|absent|unknown
-  local expected_label=${2:-} expected_title windows window_ids window_id workspaces
+  local expected_label=${2:-} expected_title state
   fm_backend_cmux_parse_target "$1" || { printf 'unknown'; return 0; }
   [ "$(fm_backend_cmux_ping_state)" = ok ] || { printf 'unknown'; return 0; }
-  windows=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>&1) || {
-    printf 'unknown'
-    return 0
-  }
-  if ! printf '%s' "$windows" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    printf 'unknown'
-    return 0
-  fi
-  window_ids=$(printf '%s' "$windows" | jq -r '.[]? | .id // empty' 2>/dev/null)
   if [ -n "$expected_label" ]; then
     expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
   fi
-  while IFS= read -r window_id; do
-    [ -n "$window_id" ] || continue
-    workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$window_id" 2>&1) || {
-      printf 'unknown'
-      return 0
-    }
-    if ! printf '%s' "$workspaces" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1; then
-      printf 'unknown'
-      return 0
-    fi
-    if printf '%s' "$workspaces" | jq -e \
-      --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg title "${expected_title:-}" \
-      'any(.workspaces[]?; .id == $id or ($title != "" and .title == $title))' >/dev/null 2>&1; then
-      printf 'present'
-      return 0
-    fi
-  done <<EOF
-$window_ids
-EOF
-  printf 'absent'
+  fm_backend_cmux_workspace_across_windows "$FM_BACKEND_CMUX_WORKSPACE" "${expected_title:-}" >/dev/null
+  state=$?
+  case "$state" in
+    0) printf 'present' ;;
+    2) printf 'absent' ;;
+    *) printf 'unknown' ;;
+  esac
 }
 
 # fm_backend_cmux_current_path: the live foreground process's cwd, or empty on
@@ -655,19 +677,12 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
 # window from `list-windows --json` and asking each for its own scoped list.
 # The count comes from the same scoped workspace list that confirms membership.
 fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count>"
-  local wsid=$1 wins wid wss count
-  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 0
-  while IFS= read -r wid; do
-    [ -n "$wid" ] || continue
-    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || continue
-    count=$(printf '%s' "$wss" | jq -er --arg id "$wsid" '
-      (.workspaces // []) as $workspaces
-      | select(any($workspaces[]?; .id == $id))
-      | ($workspaces | length)
-    ' 2>/dev/null) || continue
-    printf '%s %s' "$wid" "$count"
-    return 0
-  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+  local match wsid win count
+  match=$(fm_backend_cmux_workspace_across_windows "$1") || return 0
+  IFS=$'\t' read -r wsid win count <<EOF
+$match
+EOF
+  printf '%s %s' "$win" "$count"
 }
 
 # fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors
@@ -687,16 +702,21 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
 # leaving that window a fresh default workspace (never an fm-<home>- title, so
 # recovery/list_live ignore it) - cmux's own "closed the last tab" outcome.
 fm_backend_cmux_kill() {  # <target> [unused] [expected-label]
-  local expected_label=${3:-} wsid wininfo win count
+  local expected_label=${3:-} expected_title match wsid wininfo win count
   if [ -n "$expected_label" ]; then
-    fm_backend_cmux_target_ready "$1" "$expected_label" || return 0
+    fm_backend_cmux_parse_target "$1" || return 0
+    expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
+    match=$(fm_backend_cmux_workspace_across_windows "$FM_BACKEND_CMUX_WORKSPACE" "$expected_title") || return 0
+    IFS=$'\t' read -r wsid win count <<EOF
+$match
+EOF
   else
     fm_backend_cmux_parse_target "$1" || return 0
+    wsid=$FM_BACKEND_CMUX_WORKSPACE
+    wininfo=$(fm_backend_cmux_window_of_workspace "$wsid")
+    win=${wininfo%% *}
+    count=${wininfo##* }
   fi
-  wsid=$FM_BACKEND_CMUX_WORKSPACE
-  wininfo=$(fm_backend_cmux_window_of_workspace "$wsid")
-  win=${wininfo%% *}
-  count=${wininfo##* }
   if [ -n "$win" ] && [ "$count" = 1 ]; then
     fm_backend_cmux_cli new-workspace --window "$win" --focus false --id-format uuids >/dev/null 2>&1 || true
   fi
