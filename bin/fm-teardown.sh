@@ -975,10 +975,20 @@ validate_firstmate_operational_dirs_for_removal() {
 }
 
 validate_child_worktree_for_removal() {
-  local target=$1 project=$2 abs_target abs_home abs_root
+  local target=$1 project=$2 host_root=${3:-} abs_target abs_host abs_home abs_root
   [ -n "$target" ] || return 0
   [ -e "$target" ] || return 0
   abs_target=$(validate_removal_target "$target" "child worktree") || return 1
+  if [ -n "$host_root" ]; then
+    abs_host=$(cd "$host_root" 2>/dev/null && pwd -P) || {
+      echo "REFUSED: child host root $host_root cannot be resolved; preserving child recovery metadata" >&2
+      return 1
+    }
+    if fm_host_root_paths_overlap "$abs_host" "$abs_target"; then
+      echo "REFUSED: child host and target roots overlap (host '$abs_host'; target '$abs_target'); preserving child recovery metadata" >&2
+      return 1
+    fi
+  fi
   if abs_home=$(cd "$FM_HOME" 2>/dev/null && pwd -P); then
     if path_is_ancestor_of "$abs_home" "$abs_target"; then
       echo "REFUSED: unsafe child worktree removal target $target is inside the active firstmate home" >&2
@@ -1004,8 +1014,8 @@ safe_rm_rf() {
 }
 
 safe_rm_rf_child_worktree() {
-  local target=$1 project=$2
-  validate_child_worktree_for_removal "$target" "$project" >/dev/null || return 1
+  local target=$1 project=$2 host_root=${3:-}
+  validate_child_worktree_for_removal "$target" "$project" "$host_root" >/dev/null || return 1
   rm -rf -- "$target"
 }
 
@@ -1224,7 +1234,7 @@ preflight_firstmate_home_process_event_tree() {
 }
 
 validate_firstmate_home_children_removal() {
-  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id
+  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_host_root child_orca_worktree_id
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -1236,6 +1246,7 @@ validate_firstmate_home_children_removal() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
+    child_host_root=$(meta_value "$child_meta" host_root)
     if [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
@@ -1245,12 +1256,12 @@ validate_firstmate_home_children_removal() {
       child_orca_worktree_id=$(require_orca_worktree_id "$child_meta") || return 1
       if [ -n "$child_wt" ] && [ -e "$child_wt" ]; then
         child_proj=$(meta_value "$child_meta" project)
-        validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_host_root" >/dev/null || return 1
         require_orca_worktree_path_match "$child_orca_worktree_id" "$child_wt" || return 1
       fi
     elif [ -n "$child_wt" ] && [ -e "$child_wt" ]; then
       child_proj=$(meta_value "$child_meta" project)
-      validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+      validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_host_root" >/dev/null || return 1
     fi
   done
 }
@@ -1392,7 +1403,7 @@ preflight_firstmate_home_herdr_children() {  # <home>
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_host_mode child_orca_worktree_id child_return_rc child_busy_gen
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_host_mode child_host_root child_orca_worktree_id child_return_rc child_busy_gen
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -1405,6 +1416,7 @@ cleanup_firstmate_home_children() {
     child_backend=$(fm_backend_of_meta "$child_meta")
     child_host_mode=0
     grep -q '^host_root=.' "$child_meta" && child_host_mode=1
+    child_host_root=$(meta_value "$child_meta" host_root)
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
     else
@@ -1413,7 +1425,7 @@ cleanup_firstmate_home_children() {
     if [ "$child_backend" = orca ] && [ "$child_kind" != secondmate ]; then
       child_orca_worktree_id=$(require_orca_worktree_id "$child_meta") || return 1
       if [ -n "$child_wt" ] && [ -e "$child_wt" ]; then
-        validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_host_root" >/dev/null || return 1
       fi
     fi
     if [ "$child_host_mode" -eq 1 ] \
@@ -1422,7 +1434,8 @@ cleanup_firstmate_home_children() {
       echo "error: herdr presentation state for child $child_id requires direct child teardown; refusing destructive cleanup" >&2
       return 1
     elif [ "$child_host_mode" -eq 1 ]; then
-      ( unset FM_ROOT_OVERRIDE FM_CONFIG_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) || return 1
+      ( unset FM_ROOT_OVERRIDE FM_CONFIG_OVERRIDE; FM_HOME=$home FM_ROOT=$home \
+        fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 1 ) || return 1
     elif [ -n "$child_t" ]; then
       case "$child_backend" in
         herdr)
@@ -1460,13 +1473,13 @@ cleanup_firstmate_home_children() {
       fi
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
-        validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_host_root" >/dev/null || return 1
         rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
-      validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+      validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_host_root" >/dev/null || return 1
       rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
         "$child_wt/.opencode/plugins/fm-busy-state.js" \
         "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
@@ -1478,10 +1491,10 @@ cleanup_firstmate_home_children() {
           if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
             return "$child_return_rc"
           fi
-          safe_rm_rf_child_worktree "$child_wt" "$child_proj"
+          safe_rm_rf_child_worktree "$child_wt" "$child_proj" "$child_host_root"
         fi
       else
-        safe_rm_rf_child_worktree "$child_wt" "$child_proj"
+        safe_rm_rf_child_worktree "$child_wt" "$child_proj" "$child_host_root"
       fi
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id"
@@ -1589,11 +1602,13 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+HERDR_PRESENTATION_JOURNAL_PRESENT=0
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_PANE=
 if [ "$BACKEND" = herdr ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+  HERDR_PRESENTATION_JOURNAL_PRESENT=1
   fm_backend_source herdr || true
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
   HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
@@ -1626,21 +1641,42 @@ if [ "$BACKEND" = herdr ]; then
 fi
 
 stop_task_endpoint_and_verify() {
+  local close_status=0 endpoint_state
   if [ "$BACKEND" != herdr ]; then
-    fm_backend_stop_and_verify "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"
+    fm_backend_stop_and_verify "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" "$TASK_HOST_MODE"
     return
   fi
   if ! teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
     echo "error: herdr session presentation lock is not held for $ID; retaining every durable task record" >&2
     return 1
   fi
-  if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-    fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" 2>/dev/null || true
-  else
+  if [ "$HERDR_PRESENTATION_JOURNAL_PRESENT" != 1 ]; then
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
+    if fm_backend_herdr_endpoint_confirmed_gone "$T"; then
+      return 0
+    fi
+    echo "error: exact herdr task pane could not be confirmed absent; refusing destructive cleanup" >&2
+    return 1
   fi
-  if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
+  if [ -z "$HERDR_PRESENTATION_SESSION" ] \
+     || [ -z "$HERDR_PRESENTATION_PANE" ] \
+     || [ "$T" != "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ]; then
+    echo "error: herdr presentation metadata cannot identify the exact recorded pane; refusing destructive cleanup" >&2
+    return 1
+  fi
+  endpoint_state=$(fm_backend_target_state herdr "$T" "" "" 2>/dev/null)
+  if [ "$endpoint_state" = absent ]; then
+    [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] || rm -f "$HERDR_PRESENTATION_JOURNAL"
+    return 0
+  fi
+  fm_backend_herdr_projection_close_pane_focus_preserving \
+    "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || close_status=$?
+  if [ "$close_status" -ne 0 ]; then
+    echo "error: exact herdr task pane could not be confirmed absent; refusing destructive cleanup" >&2
+    return 1
+  fi
+  endpoint_state=$(fm_backend_target_state herdr "$T" "" "" 2>/dev/null)
+  if [ "$endpoint_state" != absent ]; then
     echo "error: exact herdr task pane could not be confirmed absent; refusing destructive cleanup" >&2
     return 1
   fi
