@@ -340,7 +340,7 @@ The tmux backend's structural `fm_tmux_composer_state` read sees placeholder-fil
 The Herdr adapter (`fm_backend_herdr_composer_state`, `bin/backends/herdr.sh`) classifies the composer's own row structurally instead of diffing raw content; see `docs/herdr-backend.md` "Composer and injection safety" for the current boundary and `tests/fm-backend-herdr.test.sh` for regression coverage.
 
 Startup dialog: the "Run Grok Build in a project directory?" project picker appears ONLY when grok is launched from a non-project directory (home, Desktop, Downloads, `/tmp`).
-`fm-spawn` launches inside the treehouse worktree (a git repo root), so the picker never appears and grok treats the worktree as a trusted project automatically - no post-launch keystroke is needed.
+Default `fm-spawn` launches inside the treehouse worktree, while host-root mode launches from `FM_HOST_ROOT`; either launch root must be a recognized project directory to avoid the picker.
 Pin `[hints] project_picker_disabled = true` in `~/.grok/config.toml` if a non-project launch ever needs to skip it.
 
 **TRUECOLOR placeholder styling: covered (task afk-herdr-false-pending, 2026-07-10).**
@@ -359,11 +359,12 @@ Turn-end hook: grok fires a `Stop` hook at every turn boundary, giving firstmate
 grok loads PROJECT hooks (`<worktree>/.grok/hooks/`, `<worktree>/.claude/settings.local.json`) only after the folder is granted hook-trust in `~/.grok/trusted_folders.toml`, which is not automatic and which firstmate will not establish by editing grok's own managed trust store.
 GLOBAL hooks in `~/.grok/hooks/` are always trusted and load on first launch.
 So `fm-spawn` installs ONE firstmate-owned global hook, `~/.grok/hooks/fm-turn-end.json`, plus the companion `~/.grok/hooks/fm-turn-end.sh`, guarded as a no-op for every non-firstmate grok session.
-Its `Stop` command fires only when the current workspace holds a `.fm-grok-turnend` token pointer that matches the firstmate-owned hook registry under `~/.grok/hooks/fm-turn-end.d/`.
-`fm-spawn` writes that per-task pointer (`<worktree>/.fm-grok-turnend`, gitignored via git info/exclude like the other harnesses' worktree hook files) and a matching registry entry naming this task's `state/<id>.turn-ended`.
-The hook reads `$GROK_WORKSPACE_ROOT`, which is always set for hooks and equals the worktree.
+Its `Stop` command fires only when a launch-scoped `FM_GROK_TURNEND_TOKEN` or the current workspace's `.fm-grok-turnend` pointer matches the firstmate-owned hook registry under `~/.grok/hooks/fm-turn-end.d/`.
+`fm-spawn` always writes the matching registry entry naming this task's `state/<id>.turn-ended`.
+Default launches write the gitignored pointer under the task worktree, while host-root launches pass the token in the worker environment and write no pointer into the host.
+The default pointer path reads `$GROK_WORKSPACE_ROOT`, which Grok sets to the launch workspace.
 This keeps the hook outside the worktree, needs no trust grant, and writes only firstmate-owned files.
-`fm-teardown` removes the worktree pointer before returning a pooled worktree.
+`fm-teardown` removes any default-mode worktree pointer before returning a pooled worktree.
 Secondmate spawns skip the pointer (idle panes are healthy, no stale-pane detection for them).
 
 **Primary-session guard fact (verified 2026-07-28, Grok 0.2.112 and 0.2.73).**
@@ -411,6 +412,7 @@ The spinner match covers the full moon-phase glyph set rather than one frame, bu
 
 [`docs/turnend-guard.md`](../../../docs/turnend-guard.md) owns Kimi's verified global hook surface and captain-approved crew wake integration.
 `fm-spawn.sh` installs one marker-delimited Firstmate entry in `$HOME/.kimi-code/config.toml`, one silent always-zero hook script, and one private token registry under `$HOME/.kimi-code/fm-turn-end.d/`.
-Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
+Default Kimi crew worktrees receive a gitignored `.fm-kimi-turnend` token pointer, while host-root launches pass `FM_KIMI_TURNEND_TOKEN` in the worker environment and write no pointer into the host.
+The global hook touches that task's `state/<id>.turn-ended` only when the Stop payload has a cwd and the selected token resolves through the private registry.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal supplements the pane busy signature, whose locale- and emoji-font-sensitive limits still apply while a turn is running.
