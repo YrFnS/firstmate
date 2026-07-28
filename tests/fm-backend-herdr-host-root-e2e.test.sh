@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Isolated real-Herdr acceptance for host-root spawn, completion, and teardown.
+# Isolated real-Herdr acceptance for host-root spawn, completion, decision inventory, and teardown.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,7 +54,7 @@ HOST="$TMP_ROOT/host"
 PROJECT="$TMP_ROOT/target"
 HOME_ROOT="$TMP_ROOT/home"
 FAKEBIN="$TMP_ROOT/fakebin"
-OBS="$TMP_ROOT/worker-observation"
+OBS="$HOME_ROOT/worker-observation"
 make_repo "$HOST" make_host
 make_repo "$PROJECT" make_target
 mkdir -p "$HOME_ROOT/data" "$HOME_ROOT/state" "$HOME_ROOT/config" "$FAKEBIN"
@@ -69,12 +69,12 @@ set -u
   printf 'target_top=%s\n' "$(git -C "$FM_TARGET_WORKTREE" rev-parse --show-toplevel)"
   printf 'host_instructions=%s\n' "$(cat "$FM_HOST_ROOT/AGENTS.md")"
   printf 'target_instructions=%s\n' "$(cat "$FM_TARGET_WORKTREE/AGENTS.md")"
-} > "$FM_E2E_OBS"
+} > "$FM_HOME/worker-observation"
 printf 'worker edit\n' > "$FM_TARGET_WORKTREE/worker-edit.txt"
-mkdir -p "$FM_HOME/data/$FM_E2E_TASK_ID"
-printf '# Real Herdr host-root report\n' > "$FM_HOME/data/$FM_E2E_TASK_ID/report.md"
-printf 'done: real Herdr host-root worker completed\n' >> "$FM_HOME/state/$FM_E2E_TASK_ID.status"
-touch "$FM_HOME/state/$FM_E2E_TASK_ID.turn-ended"
+mkdir -p "$FM_HOME/data/host-root-e2e"
+printf '# Real Herdr host-root report\n' > "$FM_HOME/data/host-root-e2e/report.md"
+printf 'done: real Herdr host-root worker completed\n' >> "$FM_HOME/state/host-root-e2e.status"
+touch "$FM_HOME/state/host-root-e2e.turn-ended"
 SH
 chmod +x "$FAKEBIN/codex"
 
@@ -85,7 +85,6 @@ chmod +x "$FAKEBIN/codex"
 SPAWN_OUT="$TMP_ROOT/spawn.out"
 (cd "$HOST" && PATH="$FAKEBIN:$PATH" FM_SPAWN_NO_GUARD=1 \
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST" \
-  FM_E2E_OBS="$OBS" FM_E2E_TASK_ID="$ID" \
   "$ROOT/bin/fm-spawn.sh" "$ID" "$PROJECT" --harness codex --backend herdr --scout \
   > "$SPAWN_OUT" 2>&1) || fail "real Herdr host-root spawn failed: $(cat "$SPAWN_OUT")"
 
@@ -122,12 +121,19 @@ case "$STATE_OUT" in
   *) fail "completion did not reconcile to done: $STATE_OUT" ;;
 esac
 
+(cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
+  "$ROOT/bin/fm-decision-hold.sh" complete "$ID" --none >/dev/null) \
+  || fail "real Herdr host-root decision inventory failed"
+
 TEARDOWN_OUT="$TMP_ROOT/teardown.out"
 (cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
   "$ROOT/bin/fm-teardown.sh" "$ID" > "$TEARDOWN_OUT" 2>&1) \
   || fail "real Herdr host-root teardown failed: $(cat "$TEARDOWN_OUT")"
 [ ! -e "$META" ] || fail "teardown retained task metadata"
-[ ! -d "$WT" ] || fail "teardown retained the target worktree"
+[ ! -f "$WT/worker-edit.txt" ] || fail "teardown retained target edits"
+TREEHOUSE_OUT=$(cd "$PROJECT" && treehouse status 2>/dev/null)
+printf '%s\n' "$TREEHOUSE_OUT" | awk '$2 == "available" { found = 1 } END { exit !found }' \
+  || fail "teardown did not return the target worktree: $TREEHOUSE_OUT"
 if herdr pane get "$PANE" --session "$SESSION" >/dev/null 2>&1; then
   fail "teardown retained the Herdr pane"
 fi
@@ -138,4 +144,4 @@ WT=
 herdr_safe_stop_and_delete "$SESSION" >/dev/null || fail "isolated Herdr lab teardown failed"
 trap - EXIT
 rm -rf "$TMP_ROOT"
-printf 'ok - real Herdr host-root spawn, completion, and teardown\n'
+printf 'ok - real Herdr host-root spawn, completion, decision inventory, and teardown\n'
