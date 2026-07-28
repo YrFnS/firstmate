@@ -181,8 +181,16 @@ Real Herdr host-root acceptance is owned by:
 tests/fm-backend-herdr-host-root-e2e.test.sh
 ```
 
-The acceptance drives `bin/fm-spawn.sh`, a completion lifecycle signal, `bin/fm-crew-state.sh`, and `bin/fm-teardown.sh` through an isolated named Herdr lab.
-It verifies host-authoritative cwd and instructions, target-only edits in the explicit linked worktree, clean host and primary target checkouts, completed task state, exact pane teardown, worktree return, and the default-session fleet-state tripwire.
+The acceptance drives `bin/fm-spawn.sh`, a completion lifecycle signal, `bin/fm-crew-state.sh`, `bin/fm-decision-hold.sh complete`, and `bin/fm-teardown.sh` through an isolated named Herdr lab.
+It verifies host-authoritative cwd and instructions, target-only edits in the explicit linked worktree, clean host and primary target checkouts, completed task state, completed decision inventory, exact pane teardown, worktree return, and the default-session fleet-state tripwire.
+The host-root acceptance passed on 2026-07-28 against Herdr 0.7.5 and Treehouse 2.0.0 on Linux.
+The exact command and output were:
+
+```text
+tests/fm-backend-herdr-host-root-e2e.test.sh
+warn: no registry at /tmp/fm-herdr-host-root-e2e.Ymlc0f/home/data/projects.md; defaulting target to no-mistakes off
+ok - real Herdr host-root spawn, completion, decision inventory, and teardown
+```
 
 ### Prune and respawn
 
