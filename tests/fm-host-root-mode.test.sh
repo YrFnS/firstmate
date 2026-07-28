@@ -321,7 +321,10 @@ case "${1:-}" in
     fi
     ;;
   set-window-option)
-    [ "${*: -2:1}" != @firstmate_task_marker ] || printf '%s' "${*: -1}" > "$marker_file"
+    if [ "${*: -2:1}" = @firstmate_task_marker ]; then
+      [ "${FM_FAIL_MARKER_SET:-0}" != 1 ] || exit 94
+      printf '%s' "${*: -1}" > "$marker_file"
+    fi
     ;;
   has-session|new-session) ;;
   new-window) : > "$endpoint"; printf '@1\n' ;;
@@ -813,12 +816,29 @@ test_spawn_rollback_is_transactional() {
   git -C "$project" worktree add -q --detach "$uncertain_wt"
   git -C "$project" worktree add -q --detach "$retained_wt"
   git -C "$project" worktree add -q --detach "$unset_wt"
-  for id in rollback-clean rollback-stuck rollback-uncertain rollback-retained; do
+  for id in rollback-marker rollback-clean rollback-stuck rollback-uncertain rollback-retained; do
     (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
       "$ROOT/bin/fm-brief.sh" "$id" target >/dev/null 2>&1)
   done
   fb=$(make_fakebin "$TMP/fake-rollback")
   log="$TMP/rollback.log"; current="$TMP/rollback.current"; tree_log="$TMP/rollback-treehouse.log"
+
+  : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_FAIL_MARKER_SET=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-rollback-marker FM_LAUNCH_FILE="$TMP/rollback-marker.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" rollback-marker "$project" pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "injected tmux marker failure unexpectedly succeeded"
+  assert_no_grep 'kill-window' "$log" "marker failure bypassed ownership verification during rollback"
+  assert_no_grep 'return --force' "$tree_log" "marker failure recycled a worktree before endpoint absence was confirmed"
+  assert_present "$home/state/rollback-marker.meta" "marker failure lost recovery metadata"
+  assert_grep 'window=@1' "$home/state/rollback-marker.meta" "marker failure did not record the created tmux window id"
+  assert_grep 'tmux_window_marker=' "$home/state/rollback-marker.meta" "marker failure did not retain its intended ownership marker"
+  assert_grep 'tmux_socket_path=' "$home/state/rollback-marker.meta" "marker failure did not retain its creating socket"
+  assert_present "$current.endpoint" "marker failure lost the unconfirmed live endpoint"
+  rm -f "$home/state/rollback-marker.meta" "$current.endpoint"
+
   printf '%s\n' "$project" > "$current"
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_FAIL_LAUNCH_SEND=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \

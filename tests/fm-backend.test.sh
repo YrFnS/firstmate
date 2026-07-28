@@ -1035,6 +1035,22 @@ test_teardown_conformance_old_vs_new() {
 test_adapter_post_create_failure_records_ownership() {
   local out counter="$TMP_ROOT/cmux-create-counter"
   out=$(bash -c '
+    . "$1/bin/fm-backend.sh"; fm_backend_source tmux
+    fm_tmux_cli() {
+      case "$1" in
+        list-windows) return 0 ;;
+        new-window) printf "@7\n" ;;
+        set-window-option) return 1 ;;
+        kill-window) printf killed ;;
+      esac
+    }
+    fm_backend_tmux_create_task firstmate fm-task /tmp marker >/dev/null 2>&1
+    rc=$?
+    printf "%s|%s|%s" "$rc" "$FM_BACKEND_CREATE_OCCURRED" "$FM_BACKEND_CREATED_TARGET"
+  ' _ "$ROOT")
+  [ "$out" = "1|1|@7" ] || fail "tmux did not retain partial post-create ownership: '$out'"
+
+  out=$(bash -c '
     . "$1/bin/fm-backend.sh"; fm_backend_source herdr
     fm_backend_herdr_cli() {
       case "$*" in
