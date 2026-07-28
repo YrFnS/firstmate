@@ -2025,7 +2025,7 @@ if [ "$KIND" = secondmate ]; then
   fi
   LAUNCH="${secondmate_root_clear}FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home $LAUNCH"
 elif [ "$HOST_MODE" -eq 1 ]; then
-  LAUNCH="FM_ROOT_OVERRIDE=$(shell_quote "$FM_ROOT") FM_HOME=$(shell_quote "$FM_HOME") FM_HOST_ROOT=$(shell_quote "$HOST_ROOT") FM_TARGET_WORKTREE=$(shell_quote "$WT") $LAUNCH"
+  LAUNCH="PATH=$(shell_quote "$PATH") FM_ROOT_OVERRIDE=$(shell_quote "$FM_ROOT") FM_HOME=$(shell_quote "$FM_HOME") FM_HOST_ROOT=$(shell_quote "$HOST_ROOT") FM_TARGET_WORKTREE=$(shell_quote "$WT") $LAUNCH"
 fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
