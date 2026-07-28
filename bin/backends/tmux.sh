@@ -82,6 +82,8 @@ fm_backend_tmux_task_marker() {
   printf 'fm-%s' "$token"
 }
 
+# FM_BACKEND_TMUX_SOCKET is consumed by fm_tmux_cli in the sourced tmux library.
+# shellcheck disable=SC2034
 fm_backend_tmux_use_socket() {
   case "$1" in
     /*) ;;
@@ -115,6 +117,8 @@ fm_backend_tmux_socket_path() {
 #     treehouse cd's into the worktree, which would break name-based targeting.
 # The returned window id lets callers target the window even if its name is ever
 # lost, so worktree discovery cannot fall back to the active client's window.
+# Creation-state globals are consumed by fm-spawn after direct function calls.
+# shellcheck disable=SC2034
 fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> [task-marker] -> prints window id
   local ses=$1 wname=$2 proj_abs=$3 marker=${4:-} wid
   FM_BACKEND_CREATE_OCCURRED=0
@@ -161,7 +165,7 @@ fm_backend_tmux_send_literal() {  # <target> <text>
 # server-global window id. Inventory matching avoids display-message's dangerous
 # fallback to the active window when a named target has disappeared.
 fm_backend_tmux_canonical_window() {  # <target> [task-marker] -> @<window-id>
-  local target=$1 expected_marker=${2:-} out status pane_id window_id named named_pane indexed_window indexed_pane marker matched= named_seen=0
+  local target=$1 expected_marker=${2:-} out status pane_id window_id named named_pane indexed_window indexed_pane marker matched='' named_seen=0
   out=$(fm_tmux_cli list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_name}.#{pane_index}|#{session_name}:#{window_index}|#{session_name}:#{window_index}.#{pane_index}|#{@firstmate_task_marker}' 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then

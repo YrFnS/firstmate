@@ -391,7 +391,7 @@ fm_backend_cmux_parse_target() {  # <target>
 
 fm_backend_cmux_workspace_across_windows() {  # <workspace_id> [expected-title] -> "<workspace_id>\t<window_id>\t<count>"
   local wsid=$1 expected_title=${2:-} wins window_ids window_id workspaces count
-  local current_id title id_match= label_match= id_count=0 label_count=0 id_conflict=0
+  local current_id title id_match='' label_match='' id_count=0 label_count=0 id_conflict=0
   wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>&1) || return 1
   printf '%s' "$wins" | jq -e 'type == "array" and all(.[]?; .id | type == "string")' >/dev/null 2>&1 || return 1
   window_ids=$(printf '%s' "$wins" | jq -r '.[].id' 2>/dev/null) || return 1

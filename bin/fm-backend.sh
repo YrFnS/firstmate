@@ -609,7 +609,7 @@ fm_backend_meta_for_window() {  # <target> <state-dir>
 # handles by their inventory-backed window id. Bare names remain on the legacy
 # resolver because they can be ambiguous across sessions.
 fm_backend_meta_for_target() {  # <target> <state-dir>
-  local target=$1 state=$2 meta canonical recorded recorded_canonical socket marker matched= status
+  local target=$1 state=$2 meta canonical recorded recorded_canonical socket marker matched='' status
   local FM_BACKEND_TMUX_SOCKET=
   if meta=$(fm_backend_meta_for_window "$target" "$state" 2>/dev/null); then
     printf '%s' "$meta"
@@ -1060,6 +1060,7 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
 # Implement the recovery-grade state contract described above.
 fm_backend_agent_state() {  # <backend> <target> [tmux-marker] [tmux-socket-path]
   local backend=$1 target=$2 tmux_marker=${3:-} tmux_socket=${4:-}
+  # shellcheck disable=SC2034  # sourced tmux helpers consume this dynamic scope
   local FM_BACKEND_TMUX_SOCKET=
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   case "$backend" in
