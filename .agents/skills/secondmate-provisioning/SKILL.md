@@ -204,16 +204,12 @@ Do not hand off `local-only` items.
 
 ## Recovery
 
-For local `kind=secondmate` meta with no window, treat the secondmate as a dead persistent direct report and respawn it with:
-
-```sh
-bin/fm-spawn.sh <id> --secondmate
-```
-
-Use the recorded `home=` in meta.
-If meta is missing but `data/secondmates.md` still registers the secondmate, respawn from the registry entry and its persistent home.
-For a remote route, the same command probes and relaunches only on the configured host.
-An SSH transport failure or unreadable remote endpoint remains unknown and must be reconciled on that host; never launch a local replacement.
+Retained `kind=secondmate` metadata remains recovery authority even when its window or endpoint field is missing.
+Do not delete or rewrite that metadata, and do not invoke a direct same-id `fm-spawn`; direct spawn refuses retained metadata so an ambiguous or incomplete cleanup cannot create a duplicate secondmate.
+The locked session-start liveness sweep owns relaunch after the recorded endpoint and verified harness produce a recovery-grade `dead` or `missing` result.
+For a remote route, that sweep probes and relaunches only on the configured host; an SSH transport failure or unreadable endpoint remains unknown and must never launch a local replacement.
+An absent endpoint field, ambiguous process, unreadable probe, or unverified harness is not relaunch authority; preserve the recorded `home=`, metadata, and endpoint evidence and report the exact blocker.
+If meta is missing but `data/secondmates.md` still registers the secondmate, respawn from the registry entry and its persistent on-disk home.
 Respawn re-resolves the secondmate harness from current config, uses the same guarded pre-launch sync, and re-propagates inherited local material, so recovered secondmates converge inherited config items and shared captain preferences whenever their home validates; tracked-file sync remains guarded separately.
 If the secondmate is already running and only inherited local material changed, prefer `bin/fm-config-push.sh` over respawning.
 To move a live LOCAL secondmate onto a newly pinned harness, model, or effort without a full recovery, set `config/secondmate-harness` and then relaunch it with `bin/fm-control.sh <id> relaunch`, which re-resolves that pin, stops the agent, and launches the replacement in the same home ([`docs/agent-control.md`](../../../docs/agent-control.md)).
