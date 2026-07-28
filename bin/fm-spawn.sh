@@ -349,6 +349,7 @@ CMUX_WORKSPACE_ID=
 CMUX_SURFACE_ID=
 TMUX_WINDOW_MARKER=
 TMUX_SOCKET_PATH=
+# shellcheck disable=SC2034  # sourced tmux helpers consume this global
 FM_BACKEND_TMUX_SOCKET=
 
 parse_orca_worktree_result() {
