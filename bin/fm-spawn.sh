@@ -1244,7 +1244,10 @@ case "$BACKEND" in
       }
       fm_backend_tmux_use_socket "$TMUX_SOCKET_PATH" || exit 1
     fi
-    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS" "$TMUX_WINDOW_MARKER") || exit 1
+    if ! capture_backend_create WID fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS" "$TMUX_WINDOW_MARKER"; then
+      arm_created_endpoint_rollback
+      exit 1
+    fi
     WT_TARGET="$WID"
     [ "$HOST_MODE" -eq 0 ] || T=$WID
     ;;
