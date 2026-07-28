@@ -130,10 +130,10 @@
 #     __GROKTOKEN__ host-mode Grok per-process task hook token
 #     __KIMITOKEN__ host-mode Kimi per-process task hook token
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
-# Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
-# a firstmate-owned global hook and registry, and a gitignored per-task pointer.
-# grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
-# plus a gitignored .fm-grok-turnend worktree pointer and a state token.
+# Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml
+# plus a Firstmate-owned global hook and registry. Grok uses the same global-hook
+# pattern under ${GROK_HOME:-$HOME/.grok}/hooks. Default launches add a gitignored
+# worktree pointer; host-root launches pass the registry token in the environment.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
@@ -674,7 +674,8 @@ launch_template() {
     # crewmate needs; it is the targeted equivalent of claude's
     # --dangerously-skip-permissions. grok's turn-end signal does NOT ride the
     # launch command - it is a Stop-event hook installed below (global hook +
-    # per-task pointer), so the template is identical for ship/scout/secondmate.
+    # registry token). Default launches discover the token through a per-task
+    # pointer, while host-root launches pass it in the environment.
     grok)
       if [ "$HOST_MODE" -eq 1 ] && [ "$kind" != secondmate ]; then
         printf '%s' 'FM_GROK_TURNEND_TOKEN=__GROKTOKEN__ grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -1844,10 +1845,10 @@ EOF
       # trust store (a high-blast-radius write). GLOBAL hooks in ~/.grok/hooks/ are
       # always trusted and load on first launch with no gate. So the turn-end hook
       # lives OUTSIDE the worktree as a single firstmate-owned global hook that is a
-      # guarded no-op for every non-firstmate grok session: it fires only when the
-      # current workspace holds a .fm-grok-turnend token pointer that matches the
-      # firstmate-owned hook registry. firstmate then drops that per-task pointer
-      # (gitignored, like the other harnesses' worktree hook files).
+      # guarded no-op for every non-firstmate grok session: it fires only when a
+      # launch-scoped token or current-workspace pointer matches the firstmate-owned
+      # hook registry. Default launches add the gitignored pointer; host-root
+      # launches pass the token without writing into the host.
       # Result: the hook is outside the worktree, needs no trust grant, and never
       # touches grok's managed config - only firstmate-owned files.
       GROK_HOOKS_DIR="${GROK_HOME:-$HOME/.grok}/hooks"
@@ -1891,10 +1892,9 @@ EOF
       fi
       ;;
     kimi*)
-      # Kimi's Stop hook is global, but it is inert unless cwd contains this
-      # task's token pointer and the token resolves through Firstmate's private
-      # registry. The installer above owns the format-preserving config edit and
-      # the always-zero, silent hook script.
+      # Kimi's Stop hook is global, but it is inert unless a launch-scoped token or
+      # cwd pointer resolves through Firstmate's private registry. The installer
+      # above owns the format-preserving config edit and always-zero silent hook.
       KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
       old_umask=$(umask)
       umask 077
