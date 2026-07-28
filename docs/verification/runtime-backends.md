@@ -263,6 +263,17 @@ The CLI matrix was checked directly:
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
 
+### Host-root task routing
+
+Real Herdr host-root acceptance is owned by:
+
+```sh
+tests/fm-backend-herdr-host-root-e2e.test.sh
+```
+
+The acceptance drives `bin/fm-spawn.sh`, a completion lifecycle signal, `bin/fm-crew-state.sh`, and `bin/fm-teardown.sh` through an isolated named Herdr lab.
+It verifies host-authoritative cwd and instructions, target-only edits in the explicit linked worktree, clean host and primary target checkouts, completed task state, exact pane teardown, worktree return, and the default-session fleet-state tripwire.
+
 ### Prune and respawn
 
 The real label-collision reproduction is owned by:

@@ -117,13 +117,16 @@ fm_backend_tmux_socket_path() {
 # lost, so worktree discovery cannot fall back to the active client's window.
 fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> [task-marker] -> prints window id
   local ses=$1 wname=$2 proj_abs=$3 marker=${4:-} wid
+  FM_BACKEND_CREATE_OCCURRED=0
+  FM_BACKEND_CREATED_TARGET=
   if fm_tmux_cli list-windows -t "$ses" -F '#{window_name}' | grep -qx "$wname"; then
     echo "error: window $ses:$wname already exists" >&2
     return 1
   fi
   wid=$(fm_tmux_cli new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs") || return 1
+  FM_BACKEND_CREATE_OCCURRED=1
+  FM_BACKEND_CREATED_TARGET=$wid
   if [ -n "$marker" ] && ! fm_tmux_cli set-window-option -t "$wid" @firstmate_task_marker "$marker" 2>/dev/null; then
-    fm_tmux_cli kill-window -t "$wid" 2>/dev/null || true
     return 1
   fi
   fm_tmux_cli set-window-option -t "$wid" automatic-rename off 2>/dev/null || true
