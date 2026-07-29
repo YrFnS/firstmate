@@ -191,7 +191,7 @@ test_metadata_lock_serializes_destructive_cleanup() {
 }
 
 test_supported_backend_endpoint_records_validate() {
-  local dir id backend target
+  local dir id backend target host_id
   dir=$(make_case valid-backends)
   # shellcheck source=/dev/null
   . "$ROOT/bin/fm-backend.sh"
@@ -233,6 +233,19 @@ test_supported_backend_endpoint_records_validate() {
     "backend=cmux" "cmux_workspace_id=workspace-1" "cmux_surface_id=surface-2"
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid cmux endpoint refused"
 
+  host_id=tmux-host-task
+  fm_write_meta "$dir/home/state/$host_id.meta" \
+    "window=@1" "endpoint_task_id=$host_id" "worktree=$dir/worktree" "project=$dir/project" \
+    "host_root=/host/one" "tmux_socket_path=/tmp/tmux.sock" "tmux_window_marker=marker"
+  fm_backend_validate_task_endpoint "$dir/home/state/$host_id.meta" "$host_id" || fail "valid host-root tmux endpoint refused"
+
+  for host_id in tmux-host-task herdr-task zellij-task orca-task cmux-task; do
+    printf 'host_root=/host/two\nhost_root=/host/three\n' >> "$dir/home/state/$host_id.meta"
+    if fm_backend_validate_task_endpoint "$dir/home/state/$host_id.meta" "$host_id" 2>/dev/null; then
+      fail "$host_id accepted ambiguous host_root ownership"
+    fi
+  done
+
   for backend in tmux herdr zellij orca cmux; do
     set +e
     fm_backend_kill "$backend" "" >/dev/null 2>&1
@@ -240,7 +253,7 @@ test_supported_backend_endpoint_records_validate() {
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate while every empty backend target refuses"
+  pass "cleanup identity: valid endpoints pass while ambiguous host ownership and empty backend targets refuse"
 }
 
 test_tmux_empty_target_refuses_without_invocation() {

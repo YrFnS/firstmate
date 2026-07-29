@@ -440,10 +440,27 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
     return 1
   fi
+  host_count=$(grep -c '^host_root=' "$meta" 2>/dev/null || true)
+  case "$host_count" in
+    0) host_root= ;;
+    1)
+      host_root=$(fm_backend_meta_exact_value "$meta" host_root) || {
+        echo "REFUSED: task $id has empty host_root ownership; preserving task state." >&2
+        return 1
+      }
+      case "$host_root" in *$'\n'*|*$'\r'*|*$'\t'*)
+        echo "REFUSED: task $id has malformed host_root ownership; preserving task state." >&2
+        return 1
+      esac
+      ;;
+    *)
+      echo "REFUSED: task $id has ambiguous host_root ownership; preserving task state." >&2
+      return 1
+      ;;
+  esac
 
   case "$backend" in
     tmux)
-      host_count=$(grep -c '^host_root=' "$meta" 2>/dev/null || true)
       if [ "$host_count" -eq 0 ]; then
         session=${window%%:*}
         pane=${window#*:}
@@ -453,7 +470,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
           return 1
         fi
       elif [ "$host_count" -eq 1 ] && [ "$binding" = "$id" ]; then
-        host_root=$(fm_backend_meta_exact_value "$meta" host_root) || host_root=
         marker=$(fm_backend_meta_exact_value "$meta" tmux_window_marker) || marker=
         socket=$(fm_backend_meta_exact_value "$meta" tmux_socket_path) || socket=
         case "$window" in
