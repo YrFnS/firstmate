@@ -146,7 +146,7 @@ Kimi pointer delivery and OpenCode 1.18.4 busy-queue behavior remain pinned by `
 
 ### Cleanup endpoint identity
 
-The cleanup identity boundary was validated on 2026-07-28 with tmux 3.6a and metadata fixtures for every supported backend.
+The cleanup identity boundary was validated on 2026-07-29 with tmux 3.7b and metadata fixtures for every supported backend.
 
 ```sh
 tests/fm-teardown-endpoint-safety.test.sh
@@ -161,10 +161,10 @@ Bounded output from the incident regression:
 
 ```text
 ok - fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call
-ok - cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate while every empty backend target refuses
+ok - cleanup identity: valid endpoints pass while ambiguous host ownership and empty backend targets refuse
 ok - tmux backend: direct empty target returns nonzero without invoking tmux
 ok - process cleanup: creation-time PID identity removes only the exact child and preserves the control child
-ok - fm-teardown: dedicated-socket invalid cleanup preserves target/control and valid cleanup removes only the exact target
+ok - fm-teardown: exact tmux cleanup preserves invalid and prefix-matched neighbors while removing only the recorded target
 ```
 
 The dedicated tmux cell removed ambient tmux variables, required a socket-bound wrapper, kept one target and one independent control window, and proved the wrapper was not called for invalid metadata or a direct empty target.
