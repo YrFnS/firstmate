@@ -26,8 +26,9 @@ paths_overlap() {
 }
 
 test_resolution_and_validation() {
-  local host="$TMP/host with spaces and apostrophe's" link="$TMP/host-link" unsafe_target out status=0
+  local host="$TMP/host with spaces and apostrophe's" link="$TMP/host-link" root="$TMP/firstmate-root" unsafe_target out status=0
   make_host "$host"
+  mkdir -p "$root" "$host/private-home"
   ln -s "$host" "$link"
   out=$(resolve_host "$link") || status=$?
   expect_code 0 "$status" "symlinked host root should resolve"
@@ -64,7 +65,32 @@ test_resolution_and_validation() {
   fi
   paths_overlap / "$host" || fail "filesystem root was not classified as an ancestor"
   paths_overlap "$host" / || fail "filesystem root was not classified as an enclosing target"
+  status=0
+  out=$(bash -c '. "$1"; fm_host_root_assert_operational_roots "$2" "$3" "$4"' \
+    _ "$LIB" "$host" "$root" "$host/private-home" 2>&1) || status=$?
+  expect_code 2 "$status" "host root overlapping FirstMate home must fail"
+  assert_contains "$out" 'must not overlap FM_HOME' "operational-root overlap refusal was unclear"
   pass "host-root library resolves physical paths and rejects unsafe, harness-specific, or overlapping roots"
+}
+
+test_ambiguous_host_owner_is_rejected() {
+  local host="$TMP/ambiguous-owner-host" other="$TMP/ambiguous-owner-other" meta="$TMP/ambiguous-owner.meta" owner="$TMP/ambiguous-owner" out status=0
+  make_host "$host"
+  make_host "$other"
+  printf 'host_root=%s\nhost_root=%s\nkind=ship\n' "$host" "$other" > "$meta"
+
+  out=$(cd "$other" && FM_HOST_ROOT="$other" bash -c \
+    '. "$1"; fm_host_root_assert_task_cwd "$2" "$3"' _ "$LIB" "$ROOT" "$meta" 2>&1) || status=$?
+  expect_code 2 "$status" "duplicate host_root metadata must not grant task authority"
+  assert_contains "$out" 'ambiguous host_root ownership' "duplicate task authority refusal was unclear"
+
+  status=0
+  out=$(bash -c '. "$1"; fm_host_root_persist_task_owner "$2" "$3"' \
+    _ "$LIB" "$meta" "$owner" 2>&1) || status=$?
+  expect_code 2 "$status" "duplicate host_root metadata must not persist owner authority"
+  assert_contains "$out" 'ambiguous host_root ownership' "duplicate owner persistence refusal was unclear"
+  assert_absent "$owner" "duplicate host_root metadata created an owner record"
+  pass "host-root authority rejects duplicate metadata before use or persistence"
 }
 
 test_host_owner_publication_is_atomic() {
@@ -1318,6 +1344,7 @@ test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
 }
 
 test_resolution_and_validation
+test_ambiguous_host_owner_is_rejected
 test_host_owner_publication_is_atomic
 test_session_cwd_mismatch_precedes_mutation
 test_host_command_rendering

@@ -12,6 +12,7 @@
 # fm_host_root_assert_task_cwd <fm-root> <task-meta>
 # fm_host_root_persist_task_owner <task-meta> <owner-file>
 # fm_host_root_paths_overlap <physical-host-root> <physical-target-root>
+# fm_host_root_assert_operational_roots <physical-host-root> <physical-fm-root> [physical-fm-home]
 # fm_host_root_command <fm-root> <repo-relative-command>
 
 fm_host_root_enabled() {
@@ -46,10 +47,7 @@ fm_host_root_resolve() {
     echo "error: FM_ROOT cannot be resolved while validating FM_HOST_ROOT: $fm_root" >&2
     return 2
   }
-  [ "$host_real" != "$root_real" ] || {
-    echo "error: FM_HOST_ROOT must differ from FM_ROOT; unset FM_HOST_ROOT for normal FirstMate-root operation" >&2
-    return 2
-  }
+  fm_host_root_assert_operational_roots "$host_real" "$root_real" || return $?
   if [ ! -f "$host_real/AGENTS.md" ]; then
     echo "error: FM_HOST_ROOT has no cross-harness instruction surface (expected AGENTS.md): $host_real" >&2
     return 2
@@ -68,10 +66,35 @@ fm_host_root_assert_session_cwd() {
   }
 }
 
+fm_host_root_recorded_owner() {
+  local meta=$1 count recorded
+  count=$(grep -c '^host_root=' "$meta" 2>/dev/null || true)
+  case "$count" in
+    0) return 1 ;;
+    1) recorded=$(sed -n 's/^host_root=//p' "$meta" 2>/dev/null) ;;
+    *)
+      echo "error: task metadata $meta has ambiguous host_root ownership" >&2
+      return 2
+      ;;
+  esac
+  [ -n "$recorded" ] || {
+    echo "error: task metadata $meta has empty host_root ownership" >&2
+    return 2
+  }
+  printf '%s\n' "$recorded"
+}
+
 fm_host_root_assert_task_cwd() {
-  local fm_root=$1 meta=$2 recorded kind host ambient cwd
-  recorded=$(sed -n 's/^host_root=//p' "$meta" 2>/dev/null | tail -1)
-  kind=$(sed -n 's/^kind=//p' "$meta" 2>/dev/null | tail -1)
+  local fm_root=$1 meta=$2 recorded kind= host ambient cwd status kind_count
+  if recorded=$(fm_host_root_recorded_owner "$meta"); then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] || return "$status"
+    recorded=
+  fi
+  kind_count=$(grep -c '^kind=' "$meta" 2>/dev/null || true)
+  [ "$kind_count" -ne 1 ] || kind=$(sed -n 's/^kind=//p' "$meta" 2>/dev/null)
   if [ -z "$recorded" ]; then
     if [ "$kind" = secondmate ]; then
       fm_host_root_assert_session_cwd "$fm_root"
@@ -103,9 +126,14 @@ fm_host_root_assert_task_cwd() {
 }
 
 fm_host_root_persist_task_owner() {
-  local meta=$1 owner=$2 recorded tmp
-  recorded=$(sed -n 's/^host_root=//p' "$meta" 2>/dev/null | tail -1)
-  [ -n "$recorded" ] || return 0
+  local meta=$1 owner=$2 recorded tmp status
+  if recorded=$(fm_host_root_recorded_owner "$meta"); then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] && return 0
+    return "$status"
+  fi
   if [ -e "$owner" ] || [ -L "$owner" ]; then
     [ -f "$owner" ] && [ ! -L "$owner" ] || {
       echo "error: host owner is not a regular file: $owner" >&2
@@ -138,6 +166,18 @@ fm_host_root_paths_overlap() {
   case "$target" in "$host"/*) return 0 ;; esac
   case "$host" in "$target"/*) return 0 ;; esac
   return 1
+}
+
+fm_host_root_assert_operational_roots() {
+  local host=$1 root=$2 home=${3:-}
+  if fm_host_root_paths_overlap "$host" "$root"; then
+    echo "error: FM_HOST_ROOT must not overlap FM_ROOT; unset FM_HOST_ROOT for normal FirstMate-root operation" >&2
+    return 2
+  fi
+  if [ -n "$home" ] && fm_host_root_paths_overlap "$host" "$home"; then
+    echo "error: FM_HOST_ROOT must not overlap FM_HOME; keep FirstMate state outside the host repository" >&2
+    return 2
+  fi
 }
 
 fm_host_root_shell_quote() {
