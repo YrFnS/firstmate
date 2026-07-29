@@ -66,6 +66,21 @@ assert_grep 'export default function () {}' "$UNMANAGED_PI/extensions/fm-firstma
 	"unmanaged extension content changed"
 pass "install refuses ambient FM conflicts and unmanaged files"
 
+mkdir -p "$HOST/private-home"
+for overlap_home in "$HOST/private-home" "$LAB"; do
+	OVERLAP_PI="$LAB/overlap-pi-$(basename "$overlap_home")"
+	set +e
+	overlap_out=$(env -u FM_ROOT_OVERRIDE -u FM_HOME -u FM_HOST_ROOT -u FM_BACKEND \
+		PI_CODING_AGENT_DIR="$OVERLAP_PI" HOME="$FAKE_HOME" \
+		"$SETUP" install "$HOST" --home "$overlap_home" --backend herdr 2>&1)
+	overlap_status=$?
+	set -e
+	[ "$overlap_status" -ne 0 ] || fail "install accepted host and FirstMate home overlap"
+	assert_contains "$overlap_out" "must not overlap FM_HOME" "host/home overlap refusal is unclear"
+	assert_absent "$OVERLAP_PI/extensions/fm-firstmate-host.ts" "host/home overlap wrote an activator"
+done
+pass "install rejects physical ancestor and descendant host/home overlap"
+
 if command -v pi >/dev/null 2>&1; then
 	mkdir -p "$HOST/.pi/extensions" "$HOST/.agents/skills/host-skill" "$FM_HOME_DIR/state"
 	cat >"$HOST/.agents/skills/host-skill/SKILL.md" <<'SKILL'
@@ -122,6 +137,28 @@ TS
     }
   ' "$PROBE" "$(cd "$HOST" && pwd -P)" "$(cd "$ROOT" && pwd -P)" "$(cd "$FM_HOME_DIR" && pwd -P)" ||
 		fail "real Pi host activation probe failed"
+
+	RUNTIME_OVERLAP_PI="$LAB/runtime-overlap-pi"
+	mkdir -p "$RUNTIME_OVERLAP_PI/extensions"
+	node -e '
+    const fs = require("fs");
+    const [source, target, home, host] = process.argv.slice(1);
+    fs.writeFileSync(target, fs.readFileSync(source, "utf8").replaceAll(JSON.stringify(home), JSON.stringify(host)));
+  ' "$ACTIVATOR" "$RUNTIME_OVERLAP_PI/extensions/fm-firstmate-host.ts" \
+		"$(cd "$FM_HOME_DIR" && pwd -P)" "$(cd "$HOST" && pwd -P)"
+	RUNTIME_OVERLAP_OUT="$LAB/runtime-overlap.out"
+	RUNTIME_OVERLAP_ERR="$LAB/runtime-overlap.err"
+	(
+		cd "$HOST" || exit 1
+		printf '%s\n' '{"type":"get_commands"}' |
+			env -u FM_ROOT_OVERRIDE -u FM_HOME -u FM_HOST_ROOT -u FM_BACKEND \
+				PI_CODING_AGENT_DIR="$RUNTIME_OVERLAP_PI" HOME="$FAKE_HOME" PI_OFFLINE=1 \
+				pi --mode rpc --no-session >"$RUNTIME_OVERLAP_OUT" 2>"$RUNTIME_OVERLAP_ERR"
+	) || fail "real Pi runtime-overlap refusal failed: $(cat "$RUNTIME_OVERLAP_ERR")"
+	assert_grep 'FirstMate inactive' "$RUNTIME_OVERLAP_OUT" "runtime overlap did not leave FirstMate inactive"
+	assert_grep 'must not overlap FM_HOME' "$RUNTIME_OVERLAP_ERR" "runtime overlap refusal was unclear"
+	assert_absent "$HOST/state/.pi-turnend-extension-loaded" "runtime overlap loaded the guard into the host"
+	assert_absent "$HOST/state/.pi-watch-extension-loaded" "runtime overlap loaded the watcher into the host"
 
 	rm -f "$FM_HOME_DIR/state/.pi-turnend-extension-loaded" "$FM_HOME_DIR/state/.pi-watch-extension-loaded"
 	OUTSIDE_OUT="$LAB/pi-outside.out"
