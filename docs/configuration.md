@@ -197,9 +197,15 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 ## Host-root mode (FM_HOST_ROOT)
 
 `FM_HOST_ROOT` is an optional physical instruction root and harness startup cwd for a primary FirstMate home.
-It is a low-level runtime contract for an explicit host integration, not an installer: setting the variable alone does not load FirstMate's supervisor policy or adapters into another repository.
 Unset or empty preserves the normal behavior in which FirstMate runs from its tracked code root.
-When set, the caller must already have loaded the FirstMate policy and required harness adapters additively, the value must resolve to an existing directory containing the cross-harness `AGENTS.md` instruction surface, it must differ from `FM_ROOT`, and the supervisor must be launched with its physical cwd at that directory.
+For Pi, run `bin/fm-host-setup.sh install <host-root> --backend herdr` once, then run plain `pi` from that exact physical host root.
+Use `--home <firstmate-home>` when operational state belongs outside this tracked FirstMate root, and use the script's `status` and `uninstall` actions to inspect or remove the managed activation.
+The setup writes only one owned global Pi extension under `${PI_CODING_AGENT_DIR:-~/.pi/agent}`, never edits the host, and refuses unmanaged target files or conflicting ambient FirstMate root, home, host, or backend variables.
+At the configured host, the global extension sets the four root/backend variables, loads FirstMate's existing Pi guard and watcher extensions, exposes FirstMate's internal skills, appends the supervisor policy after the host context, and displays `FirstMate active` in Pi's status line.
+Outside that exact physical host it contributes no environment, policy, skills, tools, or lifecycle behavior.
+The host's normal Pi project trust decision still controls its project-local instructions, skills, and extensions.
+Other harness integrations must provide the same additive policy and adapter loading before setting `FM_HOST_ROOT`; setting the variable alone is still only the low-level runtime contract.
+When set, the value must resolve to an existing directory containing the cross-harness `AGENTS.md` instruction surface, it must differ from `FM_ROOT`, and the supervisor must run with its physical cwd at that directory.
 `bin/fm-session-start.sh` validates that contract before lock acquisition or any bootstrap mutation.
 
 Host mode separates four roots:
