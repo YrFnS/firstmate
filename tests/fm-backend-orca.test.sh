@@ -1011,7 +1011,8 @@ test_teardown_preserves_metadata_when_orca_remove_error_json() {
     "backend=orca" "orca_worktree_id=wt-remove-error" \
     "decisions_reviewed=1" "decision_keys="
   orca_case remove-error-teardown
-  printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{}}\n' > "$RESP/1.out"
+  printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/2.out"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   set +e
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
@@ -1134,7 +1135,7 @@ test_host_ship_teardown_rechecks_safety_after_terminal_stop() {
   : > "$host/AGENTS.md"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
-    "window=fm-$id" "terminal=term-ship-race" "worktree=$wt" "project=$proj" \
+    "window=fm-$id" "endpoint_task_id=$id" "terminal=term-ship-race" "worktree=$wt" "project=$proj" \
     "harness=claude" "kind=ship" "mode=no-mistakes" "yolo=off" \
     "backend=orca" "orca_worktree_id=wt-ship-race" "host_root=$host"
   orca_case ship-race
