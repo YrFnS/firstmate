@@ -121,6 +121,36 @@ A rebased Codex 0.145.0 scout repeated the integrated path on 2026-07-26 through
 It loaded the host and target instruction surfaces, preserved the separate target worktree, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the host's native startup lifecycle remained active.
 [`runtime-backends.md`](runtime-backends.md#host-root-task-routing) owns the exact spawn command and path-routing evidence.
 
+Pi 0.82.1 verified the one-host global activator on 2026-07-28.
+The focused real-runtime entry point was:
+
+```sh
+pi --version
+bin/fm-test-run.sh tests/fm-host-setup.test.sh
+```
+
+Observed output:
+
+```text
+0.82.1
+ok - install is host-read-only, PI_CODING_AGENT_DIR-aware, and idempotent
+ok - install refuses ambient FM conflicts and unmanaged files
+ok - real Pi preserves host resources, loads FirstMate resources, and stays dormant elsewhere
+ok - uninstall removes only its owned file
+```
+
+A credentialed print-mode probe installed into the regular Pi home, ran this command from the temporary host, and uninstalled immediately afterward:
+
+```sh
+pi -p --approve --no-session --model openai-codex/gpt-5.6-sol --thinking low \
+  'Reply exactly HOST_ACTIVATION_OK.'
+```
+
+The later-loaded probe observed the original host `AGENTS.md` sentinel followed by the FirstMate supervisor-policy marker and FirstMate `AGENTS.md`, while both tracked guard/watch load markers were present.
+The model returned `HOST_ACTIVATION_OK`.
+A separate isolated tmux run invoked plain `pi` with no Pi flags from the configured host and observed `FirstMate active` plus both guard/watch load markers.
+`PI_CODING_AGENT_DIR` pointed that smoke at a temporary Pi home, and the installed activator remained dormant in a second cwd.
+
 ## Turn-end guard
 
 The direct and passive mechanisms were validated across all five harnesses on 2026-07-08 through 2026-07-12, with Claude's replacement Stop-owned path revalidated on 2026-07-24.

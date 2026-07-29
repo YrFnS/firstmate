@@ -1035,7 +1035,7 @@ test_forced_secondmate_teardown_uses_child_cmux_config() {
   printf 'parent-secret\n' > "$config/cmux-socket-password"
   printf 'child-secret\n' > "$home/config/cmux-socket-password"
   fm_write_meta "$state/smc.meta" \
-    "window=firstmate:99" \
+    "window=firstmate:fm-smc" \
     "worktree=$home" \
     "project=$home" \
     "kind=secondmate" \
@@ -1044,6 +1044,7 @@ test_forced_secondmate_teardown_uses_child_cmux_config() {
   fm_write_meta "$home/state/childc.meta" \
     "window=ws-child:sf-child" \
     "backend=cmux" \
+    "endpoint_task_id=childc" \
     "cmux_workspace_id=ws-child" \
     "cmux_surface_id=sf-child" \
     "worktree=$dir/missing-child-worktree" \
