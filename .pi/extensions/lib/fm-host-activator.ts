@@ -53,10 +53,12 @@ function validateConfig(config: FirstmateHostConfig): string | undefined {
 		"bash",
 		[
 			"-c",
-			'. "$1/bin/fm-backend.sh" && fm_backend_validate_spawn "$2"',
+			'. "$1/bin/fm-host-root-lib.sh" && fm_host_root_assert_operational_roots "$3" "$1" "$4" && . "$1/bin/fm-backend.sh" && fm_backend_validate_spawn "$2"',
 			"fm-host-activator",
 			config.fmRoot,
 			config.backend,
+			config.hostRoot,
+			config.fmHome,
 		],
 		{
 			encoding: "utf8",

@@ -17,6 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE="$FM_ROOT/.pi/extensions/lib/fm-host-activator.ts"
 OWNER='// firstmate-host-activator managed-v1'
+# shellcheck source=bin/fm-host-root-lib.sh
+. "$SCRIPT_DIR/fm-host-root-lib.sh"
 
 usage() {
 	awk '
@@ -162,7 +164,7 @@ install)
 	ROOT_REAL=$(physical_dir "FirstMate root" "$FM_ROOT")
 	HOME_REAL=$(physical_dir "FirstMate home" "$HOME_ARG")
 	HOST_REAL=$(physical_dir "host root" "$HOST_ARG")
-	[ "$ROOT_REAL" != "$HOST_REAL" ] || fail "host root must differ from FirstMate root"
+	fm_host_root_assert_operational_roots "$HOST_REAL" "$ROOT_REAL" "$HOME_REAL" || exit $?
 	[ -f "$HOST_REAL/AGENTS.md" ] || fail "host root has no AGENTS.md: $HOST_REAL"
 	(
 		export FM_ROOT_OVERRIDE=$ROOT_REAL FM_HOME=$HOME_REAL
