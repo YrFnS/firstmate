@@ -167,8 +167,8 @@ SH
   [ "$got" = pi ] || fail "selected plain Pi resolved '$got', expected pi"
   got=$(PATH="$fakebin:$BASE_PATH" PI_CODING_AGENT=true FM_PI_HARNESS=pi-signed-helper "$ROOT/bin/fm-harness.sh")
   [ "$got" = pi ] || fail "inexact signed selection marker resolved '$got', expected pi"
-  got=$(PATH="$fakebin:$BASE_PATH" FM_PI_HARNESS=pi-signed "$ROOT/bin/fm-harness.sh")
-  [ "$got" = pi ] || fail "signed selection marker without Pi's family marker resolved '$got', expected pi"
+got=$(env -u PI_CODING_AGENT PATH="$fakebin:$BASE_PATH" FM_PI_HARNESS=pi-signed "$ROOT/bin/fm-harness.sh")
+[ "$got" = pi ] || fail "signed selection marker without Pi's family marker resolved '$got', expected pi"
   got=$(PATH="$fakebin:$BASE_PATH" PI_CODING_AGENT=true FM_TEST_SIGNED_SHAPE=plain "$ROOT/bin/fm-harness.sh")
   [ "$got" = pi ] || fail "plain Pi marker resolved '$got', expected pi"
   got=$(PATH="$fakebin:$BASE_PATH" PI_CODING_AGENT=true FM_TEST_SIGNED_SHAPE=helper "$ROOT/bin/fm-harness.sh")
