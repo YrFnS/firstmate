@@ -90,7 +90,7 @@ fm_host_root_recorded_owner() {
 }
 
 fm_host_root_assert_task_cwd() {
-  local fm_root=$1 meta=$2 recorded kind= host ambient cwd status kind_count
+  local fm_root=$1 meta=$2 recorded kind='' host ambient cwd status kind_count
   if recorded=$(fm_host_root_recorded_owner "$meta"); then
     :
   else
