@@ -86,7 +86,8 @@ cd firstmate
 ```
 
 Then launch one of the co-primary harnesses; AGENTS.md takes over from there.
-For the low-level opt-in contract used by an explicit host integration, see [Host-root mode](docs/configuration.md#host-root-mode-fm_host_root).
+To make plain Pi activate FirstMate from one existing external host root, run `bin/fm-host-setup.sh install <host-root> --backend herdr` once, then run `pi` from that host.
+The [host-root configuration](docs/configuration.md#host-root-mode-fm_host_root) covers status, uninstall, custom homes, trust, and the four-root contract.
 
 **Claude Code**
 
