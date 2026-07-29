@@ -973,8 +973,8 @@ SH
   for action in hold complete resolve; do
     action_id="decision-post-teardown-$action"
     mkdir -p "$home/data/$action_id"
-    printf 'window=test-session:fm-%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\ntmux_window_marker=decision-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
-      "$action_id" "$host" > "$home/state/$action_id.meta"
+printf 'window=test-session:fm-%s\nendpoint_task_id=%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\ntmux_window_marker=decision-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
+"$action_id" "$action_id" "$host" > "$home/state/$action_id.meta"
     printf '%s\n' "$host" > "$current"
     : > "$current.endpoint"
     printf 'decision-marker' > "$current.endpoint.marker"
@@ -1016,8 +1016,8 @@ test_host_teardown_requires_confirmed_stop() {
   local host="$TMP/teardown-host" home="$TMP/teardown-home" project="$TMP/teardown-project" wt="$TMP/teardown-wt" fb log current tree_log out status=0 kill_line verify_line return_line
   make_host "$host"; mkdir -p "$home/data/host-teardown" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
-  printf 'window=test-session:fm-host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=teardown-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
-    "$wt" "$host" "$project" > "$home/state/host-teardown.meta"
+printf 'window=test-session:fm-host-teardown\nendpoint_task_id=host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=teardown-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
+"$wt" "$host" "$project" > "$home/state/host-teardown.meta"
   fb=$(make_fakebin "$TMP/fake-host-teardown")
   log="$TMP/host-teardown.log"; current="$TMP/host-teardown.current"; tree_log="$TMP/host-teardown-treehouse.log"
   printf '%s\n' "$host" > "$current"; : > "$current.endpoint"; printf 'teardown-marker' > "$current.endpoint.marker"; : > "$log"; : > "$tree_log"
@@ -1068,8 +1068,8 @@ test_host_teardown_refuses_recorded_overlap_before_mutation() {
   make_host "$host"
   fm_git_init_commit "$project"
   mkdir -p "$home/state" "$home/config"
-  printf 'window=test-session:fm-overlap-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\n' \
-    "$host" "$host" "$project" > "$home/state/overlap-teardown.meta"
+printf 'window=test-session:fm-overlap-teardown\nendpoint_task_id=overlap-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=overlap-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
+"$host" "$host" "$project" > "$home/state/overlap-teardown.meta"
   cp "$home/state/overlap-teardown.meta" "$TMP/overlap-teardown.meta"
   touch "$home/state/.last-watcher-beat"
   fb=$(make_fakebin "$TMP/fake-overlap-teardown")
@@ -1119,9 +1119,9 @@ test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup(
       target=child-session:w1:p2
       endpoint_named=$target
     fi
-    fm_write_meta "$subhome/state/child.meta" \
-      "window=$target" "worktree=$childwt" "project=$childproj" \
-      "backend=$backend" "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
+fm_write_meta "$subhome/state/child.meta" \
+"window=$target" 'endpoint_task_id=child' "worktree=$childwt" "project=$childproj" \
+"backend=$backend" "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
     if [ "$backend" = tmux ]; then
       printf 'tmux_window_marker=child-marker\ntmux_socket_path=/tmp/fm-test.sock\n' >> "$subhome/state/child.meta"
     fi
@@ -1194,9 +1194,10 @@ test_secondmate_force_teardown_refuses_recursive_host_overlap_before_mutation() 
   fm_write_meta "$home/state/domain.meta" \
     'window=test-session:fm-domain' "worktree=$subhome" "project=$subhome" \
     'harness=echo' 'kind=secondmate' 'mode=secondmate' "home=$subhome" 'projects=alpha'
-  fm_write_meta "$subhome/state/child.meta" \
-    'window=@1' "worktree=$host" "project=$childproj" \
-    "host_root=$host" 'harness=echo' 'kind=ship' 'mode=no-mistakes'
+fm_write_meta "$subhome/state/child.meta" \
+'window=@1' 'endpoint_task_id=child' "worktree=$host" "project=$childproj" \
+"host_root=$host" 'tmux_window_marker=child-marker' 'tmux_socket_path=/tmp/fm-test.sock' \
+'harness=echo' 'kind=ship' 'mode=no-mistakes'
   fb=$(make_fakebin "$case_root/fake")
   log="$case_root/backend.log"
   current="$case_root/current"

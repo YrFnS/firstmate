@@ -385,7 +385,7 @@ fm_backend_endpoint_atom_valid() {  # <value>
 
 fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
-  local session pane recorded_session workspace tab terminal worktree_id surface
+  local session pane recorded_session workspace tab terminal worktree_id surface host_count host_root marker socket selector
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -443,11 +443,41 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
 
   case "$backend" in
     tmux)
-      session=${window%%:*}
-      pane=${window#*:}
-      if [ "$pane" = "$window" ] || [ "$pane" != "fm-$id" ] \
-        || [ -z "$session" ]; then
-        echo "REFUSED: tmux endpoint '$window' is malformed or does not belong to task $id; preserving task state." >&2
+      host_count=$(grep -c '^host_root=' "$meta" 2>/dev/null || true)
+      if [ "$host_count" -eq 0 ]; then
+        session=${window%%:*}
+        pane=${window#*:}
+        if [ "$pane" = "$window" ] || [ "$pane" != "fm-$id" ] \
+          || [ -z "$session" ]; then
+          echo "REFUSED: tmux endpoint '$window' is malformed or does not belong to task $id; preserving task state." >&2
+          return 1
+        fi
+      elif [ "$host_count" -eq 1 ] && [ "$binding" = "$id" ]; then
+        host_root=$(fm_backend_meta_exact_value "$meta" host_root) || host_root=
+        marker=$(fm_backend_meta_exact_value "$meta" tmux_window_marker) || marker=
+        socket=$(fm_backend_meta_exact_value "$meta" tmux_socket_path) || socket=
+        case "$window" in
+          @*|%*) selector=${window#?}; case "$selector" in ''|*[!0-9]*) selector= ;; esac ;;
+          *:*)
+            session=${window%%:*}
+            pane=${window#*:}
+            selector=$window
+            [ "$pane" != "$window" ] && [ -n "$session" ] && [ -n "$pane" ] \
+              && [ "${pane#*:}" = "$pane" ] \
+              && fm_backend_endpoint_atom_valid "$session" \
+              && fm_backend_endpoint_atom_valid "$pane" || selector=
+            ;;
+          *) selector= ;;
+        esac
+        case "$socket" in /*) ;; *) socket= ;; esac
+        case "$socket$host_root" in *$'\n'*|*$'\r'*|*$'\t'*) socket= ;; esac
+        if [ -z "$host_root" ] || [ -z "$marker" ] || [ -z "$socket" ] || [ -z "$selector" ] \
+          || ! fm_backend_endpoint_atom_valid "$marker"; then
+          echo "REFUSED: host-root tmux endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+          return 1
+        fi
+      else
+        echo "REFUSED: host-root tmux endpoint metadata for task $id is missing or ambiguous; preserving task state." >&2
         return 1
       fi
       ;;

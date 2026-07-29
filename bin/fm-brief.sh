@@ -163,7 +163,7 @@ PROJECT_MEMORY_TARGET="."
 PROJECT_MEMORY_CONTEXT='in the worktree'
 if [ "$HOST_MODE" -eq 1 ]; then
   EXECUTION_MARKER='<!-- firstmate-execution-mode: host-root -->'
-  EXECUTION_SECTION=$(cat <<'EOF'
+  IFS= read -r -d '' EXECUTION_SECTION <<'EOF' || true
 # Host-root execution contract
 Your top-level process cwd is the physical host instruction root `__HOST_ROOT__`, not the target repository.
 The host root is authoritative for identity, startup, lifecycle, and cross-repository safety; keep it read-only except for effects produced by its own native lifecycle hooks.
@@ -174,7 +174,7 @@ Read the target worktree root instructions and every applicable nested instructi
 Use absolute paths, `git -C "$FM_TARGET_WORKTREE" ...`, or a scoped subshell for every target operation while keeping the top-level process cwd at the host root.
 Run tests, builds, GitHub tooling, and no-mistakes against `$FM_TARGET_WORKTREE` only; never run a bare target command from the host repository.
 EOF
-)
+  EXECUTION_SECTION=${EXECUTION_SECTION%$'\n'}
   EXECUTION_SECTION=${EXECUTION_SECTION//__HOST_ROOT__/$HOST_ROOT}
   CREW_INTRO="$CREW_INTRO"$'\n'"$EXECUTION_MARKER"$'\n'"$EXECUTION_SECTION"
   # shellcheck disable=SC2016  # These variables are literal Markdown instructions for the worker.
@@ -281,12 +281,12 @@ if [ "$HOST_MODE" -eq 1 ]; then
   # shellcheck disable=SC2016  # Literal Markdown, not shell expansion.
   ISOLATION_SECTION='**Verify isolation before anything else.** Follow the host-root execution contract above. If the host cwd or target worktree check fails, append `blocked: host-root or isolated target verification failed` and stop before branching or editing.'
 else
-  ISOLATION_SECTION=$(cat <<'EOF'
+  IFS= read -r -d '' ISOLATION_SECTION <<'EOF' || true
 **Verify isolation before anything else.** Run `pwd -P` and `git rev-parse --show-toplevel`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: `git rev-parse --git-dir` and `git rev-parse --git-common-dir` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append `blocked: launched in primary checkout, not an isolated worktree` to the status file and stop.
 EOF
-)
+  ISOLATION_SECTION=${ISOLATION_SECTION%$'\n'}
 fi
 
 if [ "$HERDR_LAB" -eq 1 ]; then
