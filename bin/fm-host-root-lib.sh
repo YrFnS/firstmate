@@ -20,7 +20,7 @@ fm_host_root_enabled() {
 }
 
 fm_host_root_resolve() {
-  local fm_root=${1:-.} host root_real host_real
+  local fm_root=${1:-.} host home root_real host_real home_real
   fm_host_root_enabled || return 1
   host=$FM_HOST_ROOT
   case "$host" in
@@ -47,7 +47,12 @@ fm_host_root_resolve() {
     echo "error: FM_ROOT cannot be resolved while validating FM_HOST_ROOT: $fm_root" >&2
     return 2
   }
-  fm_host_root_assert_operational_roots "$host_real" "$root_real" || return $?
+  home=${FM_HOME:-$fm_root}
+  home_real=$(cd "$home" 2>/dev/null && pwd -P) || {
+    echo "error: FM_HOME cannot be resolved while validating FM_HOST_ROOT: $home" >&2
+    return 2
+  }
+  fm_host_root_assert_operational_roots "$host_real" "$root_real" "$home_real" || return $?
   if [ ! -f "$host_real/AGENTS.md" ]; then
     echo "error: FM_HOST_ROOT has no cross-harness instruction surface (expected AGENTS.md): $host_real" >&2
     return 2
