@@ -191,7 +191,7 @@ At the configured host, the global extension sets the four root/backend variable
 Outside that exact physical host it contributes no environment, policy, skills, tools, or lifecycle behavior.
 The host's normal Pi project trust decision still controls its project-local instructions, skills, and extensions.
 Other harness integrations must provide the same additive policy and adapter loading before setting `FM_HOST_ROOT`; setting the variable alone is still only the low-level runtime contract.
-When set, the value must resolve to an existing directory containing the cross-harness `AGENTS.md` instruction surface, it must differ from `FM_ROOT`, and the supervisor must run with its physical cwd at that directory.
+When set, the value must resolve to an existing directory containing the cross-harness `AGENTS.md` instruction surface, it must not physically overlap `FM_ROOT` or `FM_HOME`, and the supervisor must run with its physical cwd at that directory.
 `bin/fm-session-start.sh` validates that contract before lock acquisition or any bootstrap mutation.
 
 Host mode separates four roots:
