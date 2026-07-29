@@ -126,8 +126,18 @@ SH
 }
 
 test_session_cwd_mismatch_precedes_mutation() {
-  local host="$TMP/session-host" home="$TMP/session-home" other="$TMP/session-other" fake_root out status=0
+  local host="$TMP/session-host" home="$TMP/session-home" overlap_home="$TMP/session-home-link" other="$TMP/session-other" fake_root before after out status=0
   make_host "$host"; mkdir -p "$home/state" "$home/data" "$home/config" "$other"
+  ln -s "$host" "$overlap_home"
+  before=$(find "$host" -mindepth 1 -maxdepth 3 -print | sort)
+  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$overlap_home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-session-start.sh" 2>&1) || status=$?
+  expect_code 2 "$status" "session-start must reject a physical host and home overlap"
+  assert_contains "$out" 'must not overlap FM_HOME' "session-start host/home overlap refusal was unclear"
+  after=$(find "$host" -mindepth 1 -maxdepth 3 -print | sort)
+  [ "$before" = "$after" ] || fail "session-start mutated the host before rejecting overlapping FM_HOME"
+
+  status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-session-start.sh" 2>&1) || status=$?
   expect_code 2 "$status" "session-start host cwd mismatch must fail"
   assert_contains "$out" 'requires the supervisor cwd' "session-start mismatch did not explain the host cwd"
