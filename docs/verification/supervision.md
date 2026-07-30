@@ -232,7 +232,7 @@ A rebased Codex 0.145.0 scout repeated the integrated path on 2026-07-26 through
 It loaded the host and target instruction surfaces, preserved the separate target worktree, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the host's native startup lifecycle remained active.
 [`runtime-backends.md`](runtime-backends.md#host-root-task-routing) owns the exact spawn command and path-routing evidence.
 
-Pi 0.82.1 verified the one-host global activator on 2026-07-29.
+Pi 0.82.1 verified the one-host global activator on 2026-07-29 and the host-root worker exclusion on 2026-07-30.
 The focused real-runtime entry point was:
 
 ```sh
@@ -245,6 +245,7 @@ Observed output:
 ```text
 0.82.1
 ok - install is host-read-only, PI_CODING_AGENT_DIR-aware, and idempotent
+ok - host-root Pi workers do not load FirstMate supervisor policy or extensions
 ok - install refuses ambient FM conflicts and unmanaged files
 ok - install rejects physical ancestor and descendant host/home overlap
 ok - real Pi preserves host resources, loads FirstMate resources, and stays dormant elsewhere

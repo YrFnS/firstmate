@@ -6,7 +6,8 @@
 #        fm-host-setup.sh uninstall
 #
 # The activator is installed under ${PI_CODING_AGENT_DIR:-~/.pi/agent} and is
-# dormant unless Pi's physical cwd equals the configured host root.
+# dormant unless Pi's physical cwd equals the configured host root and
+# FM_TARGET_WORKTREE is unset.
 # Install updates only a file carrying this script's ownership marker, refuses
 # conflicting ambient FM_ROOT_OVERRIDE/FM_HOME/FM_HOST_ROOT/FM_BACKEND values,
 # and writes nothing into the host repository.
