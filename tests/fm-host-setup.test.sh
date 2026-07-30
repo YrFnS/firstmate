@@ -41,6 +41,29 @@ assert_contains "$status_out" "host: $(cd "$HOST" && pwd -P)" "status did not re
 assert_contains "$status_out" "firstmate home: $(cd "$FM_HOME_DIR" && pwd -P)" "status did not report the FirstMate home"
 pass "install is host-read-only, PI_CODING_AGENT_DIR-aware, and idempotent"
 
+WORKER_TARGET="$LAB/worker-target"
+mkdir -p "$WORKER_TARGET" "$FM_HOME_DIR/state"
+node --experimental-strip-types --input-type=module - "$ACTIVATOR" "$HOST" "$WORKER_TARGET" \
+	"$(cd "$ROOT" && pwd -P)" "$(cd "$FM_HOME_DIR" && pwd -P)" <<'JS'
+import { pathToFileURL } from "node:url";
+const [activator, host, target, root, home] = process.argv.slice(2);
+process.chdir(host);
+Object.assign(process.env, {
+  FM_ROOT_OVERRIDE: root,
+  FM_HOME: home,
+  FM_HOST_ROOT: host,
+  FM_BACKEND: "herdr",
+  FM_TARGET_WORKTREE: target,
+});
+const events = [];
+const pi = { on: (event) => events.push(event) };
+await (await import(pathToFileURL(activator).href)).default(pi);
+if (events.length) throw new Error(`host worker registered supervisor events: ${events.join(", ")}`);
+JS
+assert_absent "$FM_HOME_DIR/state/.pi-turnend-extension-loaded" "host worker loaded the guard extension"
+assert_absent "$FM_HOME_DIR/state/.pi-watch-extension-loaded" "host worker loaded the watch extension"
+pass "host-root Pi workers do not load FirstMate supervisor policy or extensions"
+
 CONFLICT_PI="$LAB/conflict-pi"
 set +e
 conflict_out=$(FM_HOME="$LAB/conflict" PI_CODING_AGENT_DIR="$CONFLICT_PI" HOME="$FAKE_HOME" \
