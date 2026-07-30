@@ -89,7 +89,11 @@ export default async function activateFirstmateHost(
 	pi: ExtensionAPI,
 	config: FirstmateHostConfig,
 ): Promise<void> {
-	if (physicalPath(process.cwd()) !== config.hostRoot) return;
+	if (
+		process.env.FM_TARGET_WORKTREE ||
+		physicalPath(process.cwd()) !== config.hostRoot
+	)
+		return;
 
 	const invalid = validateConfig(config);
 	if (invalid) {
