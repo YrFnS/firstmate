@@ -1806,7 +1806,8 @@ JSON
     tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" >"$hidden_snapshot"
     if ! grep -Fq "CALM_E2E_OUTPUT" "$hidden_snapshot" &&
       ! grep -Fq "/calm" "$hidden_snapshot" &&
-      ! grep -Fq "Thinking..." "$hidden_snapshot"; then
+      ! grep -Fq "Thinking..." "$hidden_snapshot" &&
+      ! grep -Fq "fm_watch_arm_pi" "$hidden_snapshot"; then
       break
     fi
     sleep 0.05
@@ -1944,6 +1945,7 @@ JS
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/export $export_file"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
   wait_for_text "$export_snapshot" "Session exported to: $export_file" \
+    || [ -s "$export_file" ] \
     || fail "/export did not complete while calm mode was on"
   node - "$export_file" <<'JS' || fail "calm-mode HTML export lost tool data or persisted synthetic provenance"
 const html = require("node:fs").readFileSync(process.argv[2], "utf8");
