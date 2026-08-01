@@ -119,7 +119,7 @@ Claude, Codex, OpenCode, Pi, pi-signed, Grok, and Kimi share that backend cleanu
 
 ### Host-root task routing
 
-The host-root path was reverified on 2026-08-01 with Herdr 0.7.5 and Treehouse 2.0.0 through the real isolated acceptance after ordinary workers moved back to their target worktree cwd.
+The host-root path was verified on 2026-08-01 with Herdr 0.7.5 and Treehouse 2.0.0 through the real isolated acceptance.
 The supervisor-side invocation shape remains:
 
 ```sh
@@ -136,7 +136,6 @@ FM_BACKEND=tmux \
 The worker observed its physical cwd, target Git root, and `FM_TARGET_WORKTREE` all equal to the detached isolated target worktree, distinct from the clean primary checkout and `FM_HOST_ROOT`.
 It read the target `AGENTS.md` natively from that cwd, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
 The supervisor remained rooted in the host repository, which stayed clean and did not enter the worker context.
-The earlier 2026-07-26 live evidence with workers launched from `FM_HOST_ROOT` is superseded by this target-root contract.
 
 Current entry point and observed output:
 
@@ -182,24 +181,9 @@ The CLI matrix was checked directly:
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
 
-### Host-root task routing
+### Host-root acceptance
 
-Real Herdr host-root acceptance is owned by:
-
-```sh
-tests/fm-backend-herdr-host-root-e2e.test.sh
-```
-
-The acceptance drives `bin/fm-spawn.sh`, a completion lifecycle signal, `bin/fm-crew-state.sh`, `bin/fm-decision-hold.sh complete`, and `bin/fm-teardown.sh` through an isolated named Herdr lab.
-It verifies host-authoritative cwd and instructions, target-only edits in the explicit linked worktree, clean host and primary target checkouts, completed task state, completed decision inventory, exact pane teardown, worktree return, and the default-session fleet-state tripwire.
-The host-root acceptance passed on 2026-07-28 against Herdr 0.7.5 and Treehouse 2.0.0 on Linux.
-The exact command and output were:
-
-```text
-tests/fm-backend-herdr-host-root-e2e.test.sh
-warn: no registry at /tmp/fm-herdr-host-root-e2e.Ymlc0f/home/data/projects.md; defaulting target to no-mistakes off
-ok - real Herdr host-root spawn, completion, decision inventory, and teardown
-```
+Current Herdr host-root commands, topology, and output are owned by the shared [host-root task-routing evidence](#host-root-task-routing).
 
 ### Prune and respawn
 
