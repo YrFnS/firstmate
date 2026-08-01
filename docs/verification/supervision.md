@@ -207,20 +207,10 @@ tests/fm-crew-state.test.sh
 
 ## Host-root task integration
 
-The 2026-07-19 additive task lifecycle evidence is superseded by target-root worker routing and is retained below only as historical evidence for the earlier host-cwd topology.
 Ordinary workers now load target-repository context only, while the primary supervisor alone loads the host instructions and lifecycle.
-Under the superseded topology, the adapters were checked on Linux with Codex 0.144.5, OpenCode 1.17.14, Pi 0.80.10, and Claude Code 2.1.214.
-Codex and OpenCode each loaded the host `AGENTS.md`, emitted one host session-start event, one host completion event, and one task completion event in that historical run.
-Pi loaded one host extension and one explicit task extension once each for a single-turn probe, and a trusted FirstMate-root run confirmed project extension discovery coexists with an explicit task extension.
-The exact Claude probe was:
-
-```sh
-claude -p --settings "$task_settings" --dangerously-skip-permissions \
-  'Complete one turn and exit.'
-```
-
-The host project `SessionStart` hook fired once, proving `--settings` remains additive to project settings, but organization policy blocked model access before Stop and prevented live task-hook confirmation.
-Grok was unavailable, so its launch-scoped host-root token remains generated and focused-test verified rather than live verified.
+The earlier host-cwd evidence that workers loaded the host `AGENTS.md` is superseded by this target-root contract.
+Claude's additive task settings reached the launch project's `SessionStart` hook, but organization policy blocked model access before Stop, so its task completion signal remains focused-test verified.
+Grok's launch-scoped host-root token remains generated and focused-test verified rather than live verified.
 Kimi 0.29.1 launch and global-hook mechanics were live-verified on 2026-07-25, while its launch-scoped host-root token remains focused-test verified rather than live lifecycle verified.
 The reusable deterministic entry points are:
 
@@ -232,7 +222,6 @@ tests/fm-kimi-harness.test.sh
 
 The integrated path was reverified on 2026-08-01 through Herdr 0.7.5 and Treehouse 2.0.0.
 The worker launched from the isolated target worktree, read target instructions natively, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the supervisor stayed rooted in the unchanged host repository.
-The earlier 2026-07-26 host-cwd worker evidence is superseded.
 [`runtime-backends.md`](runtime-backends.md#host-root-task-routing) owns the exact spawn command and path-routing evidence.
 
 Pi 0.82.1 verified the one-host global activator on 2026-07-29 and the host-root worker exclusion on 2026-07-30.

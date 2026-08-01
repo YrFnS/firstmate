@@ -1411,10 +1411,10 @@ state="\${0%/*}/herdr-live"
 case "\${1:-} \${2:-}" in
   "session list") printf '%s\n' '{"sessions":[{"name":"default","running":true,"socket_path":"$case_dir/herdr.sock"}]}' ;;
   "status --json") printf '%s\n' '{"server":{"running":true}}' ;;
-  "pane close") rm -f "$state" ;;
+  "pane close") rm -f "\$state" ;;
   "pane get")
-    if [ -f "$state" ]; then
-      printf '%s\n' '{"result":{"pane":{"pane_id":"pQ"}}}'
+    if [ -f "\$state" ]; then
+      printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ"}}}'
     else
       printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
       exit 1

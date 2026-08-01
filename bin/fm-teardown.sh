@@ -2208,6 +2208,11 @@ preflight_firstmate_home_herdr_children() {  # <home>
     child_backend=$FM_BACKEND_VALIDATED_BACKEND
     child_target=$FM_BACKEND_VALIDATED_TARGET
     if [ "$child_backend" = herdr ]; then
+      if grep -q '^host_root=.' "$child_meta" \
+         && { [ -e "$sub_state/$child_id.herdr-presentation" ] || [ -L "$sub_state/$child_id.herdr-presentation" ]; }; then
+        echo "error: herdr presentation state for child $child_id requires direct child teardown; refusing destructive cleanup" >&2
+        return 1
+      fi
       teardown_herdr_preflight_target "$child_target" "$child_id" || return 1
     fi
     child_kind=$(meta_value "$child_meta" kind)
@@ -2501,7 +2506,7 @@ stop_task_endpoint_and_verify() {
     if fm_backend_herdr_endpoint_confirmed_gone "$T"; then
       return 0
     fi
-    echo "error: exact herdr task pane could not be confirmed absent; refusing destructive cleanup" >&2
+    echo "error: exact herdr task-pane close could not be confirmed absent; pane is not confirmed gone; refusing destructive cleanup" >&2
     return 1
   fi
   if [ -z "$HERDR_PRESENTATION_SESSION" ] \
@@ -2518,12 +2523,12 @@ stop_task_endpoint_and_verify() {
   fm_backend_herdr_projection_close_pane_focus_preserving \
     "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || close_status=$?
   if [ "$close_status" -ne 0 ]; then
-    echo "error: exact herdr task pane could not be confirmed absent; refusing destructive cleanup" >&2
+    echo "error: exact herdr task-pane close could not be confirmed absent; pane is not confirmed gone; refusing destructive cleanup" >&2
     return 1
   fi
   endpoint_state=$(fm_backend_target_state herdr "$T" "" "" 2>/dev/null)
   if [ "$endpoint_state" != absent ]; then
-    echo "error: exact herdr task pane could not be confirmed absent; refusing destructive cleanup" >&2
+    echo "error: exact herdr task-pane close could not be confirmed absent; pane is not confirmed gone; refusing destructive cleanup" >&2
     return 1
   fi
   [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] || rm -f "$HERDR_PRESENTATION_JOURNAL"

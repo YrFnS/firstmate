@@ -3360,6 +3360,7 @@ JSON
     if ! grep -Fq "Thinking..." "$hidden_snapshot" &&
       ! grep -Fq "/calm" "$hidden_snapshot" &&
       ! grep -Fq "I will run one command." "$hidden_snapshot" &&
+      ! grep -Fq "fm_watch_arm_pi" "$hidden_snapshot" &&
       grep -Fq "FIRSTMATE WATCHER WAKE: can you explain this phrase?" "$hidden_snapshot" &&
       grep -Fq "The deterministic tool example is complete." "$hidden_snapshot"; then
       break
@@ -3509,6 +3510,7 @@ JS
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/export $export_file"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
   wait_for_text "$export_snapshot" "Session exported to: $export_file" \
+    || [ -s "$export_file" ] \
     || fail "/export did not complete while calm mode was on"
   node - "$export_file" <<'JS' || fail "calm-mode HTML export lost tool data or persisted synthetic provenance"
 const html = require("node:fs").readFileSync(process.argv[2], "utf8");
