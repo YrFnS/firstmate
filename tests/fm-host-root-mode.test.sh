@@ -403,7 +403,7 @@ SH
 }
 
 test_spawn_separates_roots() {
-  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file socket out status=0 before after tree_line launch_line
+  local host="$TMP/spawn & host" home="$TMP/spawn home's \"quoted\" \\ & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file socket out status=0 before after tree_line launch_line
   make_host "$host"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   fm_git_init_commit "$project"
@@ -441,16 +441,16 @@ test_spawn_separates_roots() {
   assert_grep "host=$host" "$obs" "worker did not receive the exact host root"
   assert_grep "target=$wt" "$obs" "worker did not receive the exact target worktree"
   turnend="$(cd "$home/state" && pwd -P)/lane.turn-ended"
-  python3 - "$argv" "$turnend" <<'PY' || fail "Codex notify argv did not preserve the hostile turn-end path"
-import pathlib, subprocess, sys
+python3 - "$argv" "$turnend" <<'PY' || fail "Codex notify argv did not preserve the hostile turn-end path"
+import pathlib, subprocess, sys, tomllib
 args = pathlib.Path(sys.argv[1]).read_bytes().split(b"\0")
 args = [a.decode() for a in args if a]
 assert args.count("-c") == 1, args
 i = args.index("-c")
 config = args[i + 1]
-assert config.startswith('notify=["bash","-c","touch -- '), config
-assert config.endswith('"]'), config
-subprocess.run(["bash", "-c", config[len('notify=["bash","-c","'):-2]], check=True)
+notify = tomllib.loads(config)["notify"]
+assert notify[:2] == ["bash", "-c"], notify
+subprocess.run(notify, check=True)
 PY
   assert_present "$turnend" "Codex notify command did not touch the exact hostile path"
   assert_present "$wt/worker-edit.txt" "disposable worker probe did not edit the target worktree"

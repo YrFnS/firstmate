@@ -207,8 +207,10 @@ tests/fm-crew-state.test.sh
 
 ## Host-root task integration
 
-The additive task lifecycle adapters were checked on Linux on 2026-07-19 with Codex 0.144.5, OpenCode 1.17.14, Pi 0.80.10, and Claude Code 2.1.214.
-Codex and OpenCode each loaded the host `AGENTS.md`, emitted one host session-start event, one host completion event, and one task completion event when launched with the state-owned adapter configuration rendered by `bin/fm-spawn.sh`.
+The 2026-07-19 additive task lifecycle evidence is superseded by target-root worker routing and is retained below only as historical evidence for the earlier host-cwd topology.
+Ordinary workers now load target-repository context only, while the primary supervisor alone loads the host instructions and lifecycle.
+Under the superseded topology, the adapters were checked on Linux with Codex 0.144.5, OpenCode 1.17.14, Pi 0.80.10, and Claude Code 2.1.214.
+Codex and OpenCode each loaded the host `AGENTS.md`, emitted one host session-start event, one host completion event, and one task completion event in that historical run.
 Pi loaded one host extension and one explicit task extension once each for a single-turn probe, and a trusted FirstMate-root run confirmed project extension discovery coexists with an explicit task extension.
 The exact Claude probe was:
 

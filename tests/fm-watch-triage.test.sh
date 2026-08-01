@@ -152,6 +152,8 @@ test_stale_is_terminal_classifier() {
   fm_write_meta "$state/herdr-term.meta" "window=default:w1:p2" "backend=herdr"
   printf 'done: ready in branch fm/herdr\n' > "$state/herdr-term.status"
   stale_is_terminal "default:w1:p2" "$state" || fail "terminal herdr stale status not resolved through metadata"
+  printf 'done: ready in branch fm/prefixed\n' > "$state/fm-prefixed.status"
+  stale_is_terminal "fm-prefixed" "$state" "fm-prefixed" || fail "terminal stale status lost an explicit fm-prefixed task id"
   printf 'working: compiling\n' > "$state/nonterm.status"
   stale_is_terminal "sess:fm-nonterm" "$state" && fail "non-terminal stale classified terminal"
   stale_is_terminal "sess:fm-missing" "$state" && fail "stale with no status classified terminal"
