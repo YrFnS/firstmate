@@ -1828,7 +1828,8 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_claude_settings=$(shell_quote "$STATE/$ID.claude-settings.json")
-sq_codex_notify=$(shell_quote "notify=[\"bash\",\"-c\",\"touch -- $sq_turnend\"]")
+codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify(["bash", "-c", "touch -- " + process.argv[1]]))' "$sq_turnend")
+sq_codex_notify=$(shell_quote "$codex_notify")
 sq_opencode_config=
 if [ "$HOST_MODE" -eq 1 ] && [ "$HARNESS" = opencode ]; then
   opencode_plugin_url=$(node -e 'process.stdout.write(require("node:url").pathToFileURL(process.argv[1]).href)' \
