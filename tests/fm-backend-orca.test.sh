@@ -23,8 +23,36 @@ next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
   for a in "$@"; do printf '\x1f%s' "$a"; done
   printf '\n'
 } >> "$LOG"
-if [ "${1:-}" = terminal ] && [ "${2:-}" = close ] && [ -n "${FM_ORCA_CLOSE_MUTATION:-}" ]; then
-  printf 'late worker edit\n' > "$FM_ORCA_CLOSE_MUTATION"
+if [ "${1:-}" = terminal ] && [ "${2:-}" = close ]; then
+  [ -z "${FM_ORCA_CLOSE_MUTATION:-}" ] || printf 'late worker edit\n' > "$FM_ORCA_CLOSE_MUTATION"
+  [ -z "${FM_ORCA_CWD_PATH:-}" ] || : > "$RESP/.cwd-closed"
+fi
+if [ -n "${FM_ORCA_CWD_PATH:-}" ] && [ "${1:-}" = terminal ] && [ "${2:-}" = send ]; then
+  text=
+  while [ "$#" -gt 0 ]; do
+    [ "$1" != --text ] || { text=${2:-}; break; }
+    shift
+  done
+  case "$text" in
+    *'__FM_ORCA_CWD_BEGIN_'*)
+      printf '%s\n' "$text" | grep -o '__FM_ORCA_CWD_[A-Z]*_[A-Za-z0-9_]*__' > "$RESP/.cwd-markers"
+      printf '{"ok":true}\n'
+      exit 0
+      ;;
+  esac
+fi
+if [ -n "${FM_ORCA_CWD_PATH:-}" ] && [ "${1:-}" = terminal ] && [ "${2:-}" = read ] && [ -f "$RESP/.cwd-markers" ]; then
+  if [ -e "$RESP/.cwd-closed" ]; then
+    printf '{"ok":false,"error":{"code":"terminal_not_found","message":"terminal closed"}}\n'
+    exit 0
+  fi
+  begin=$(head -1 "$RESP/.cwd-markers")
+  end=$(tail -1 "$RESP/.cwd-markers")
+  python3 - "$begin" "$FM_ORCA_CWD_PATH" "$end" <<'PY'
+import json, sys
+print(json.dumps({"result": {"terminal": {"tail": sys.argv[1:]}}}))
+PY
+  exit 0
 fi
 if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ]; then
   printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
@@ -560,24 +588,27 @@ test_spawn_preserves_pathless_orca_worktree_without_terminal_proof() {
 }
 
 test_spawn_writes_orca_metadata_and_launches_harness() {
-  local proj wt data state config id out log
+  local host proj wt data state config id out log
   id="orcaspawnz1"
+  host="$TMP_ROOT/spawn-host"
   proj="$TMP_ROOT/spawn-project"
   wt="$TMP_ROOT/spawn-wt"
   data="$TMP_ROOT/spawn-data"
   state="$TMP_ROOT/spawn-state"
   config="$TMP_ROOT/spawn-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
-  mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  mkdir -p "$host" "$TMP_ROOT/spawn-home" "$data/$id" "$state" "$config"
+  printf 'host instructions\n' > "$host/AGENTS.md"
+  printf '<!-- firstmate-execution-mode: host-root -->\nbrief\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case spawn
   log="$LOG"
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-spawn"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-spawn","path":"%s"},"terminal":{"handle":"term-spawn"}}}\n' "$wt" > "$RESP/3.out"
-  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+  out=$(cd "$host" && PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" FM_ORCA_CWD_PATH="$wt" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$TMP_ROOT/spawn-home" FM_HOST_ROOT="$host" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend orca 2>&1 )
   expect_code 0 $? "fm-spawn.sh --backend orca should succeed with fake Orca"$'\n'"$out"
@@ -588,14 +619,50 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   assert_grep "terminal=term-spawn" "$state/$id.meta" "meta missing terminal handle"
   assert_grep "orca_worktree_id=wt-spawn" "$state/$id.meta" "meta missing Orca worktree id"
   assert_grep "worktree=$wt" "$state/$id.meta" "meta missing Orca worktree path"
+  assert_grep "host_root=$host" "$state/$id.meta" "meta missing host supervisor authority"
+  assert_contains "$(cat "$log")" 'pwd -P' "host-root Orca spawn did not verify the terminal target cwd"
   assert_not_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''create' \
     "spawn should reuse the implicit terminal returned by Orca worktree creation"
   assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f''export GOTMPDIR=/tmp/fm-orcaspawnz1/gotmp'$'\x1f''--enter'$'\x1f''--json' \
     "spawn did not export GOTMPDIR through the Orca terminal"
-  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions" \
+  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --settings" \
     "spawn did not send the selected harness launch command through Orca"
   rm -rf "/tmp/fm-$id"
-  pass "fm-spawn.sh --backend orca: reuses implicit terminal, records metadata, launches harness"
+  pass "fm-spawn.sh --backend orca: verifies target cwd, records metadata, launches harness"
+}
+
+test_host_root_spawn_refuses_wrong_orca_terminal_cwd() {
+  local host proj wt data state config id out status=0
+  id="orcacwdz2"
+  host="$TMP_ROOT/cwd-host"
+  proj="$TMP_ROOT/cwd-project"
+  wt="$TMP_ROOT/cwd-wt"
+  data="$TMP_ROOT/cwd-data"
+  state="$TMP_ROOT/cwd-state"
+  config="$TMP_ROOT/cwd-config"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  mkdir -p "$host" "$TMP_ROOT/cwd-home" "$data/$id" "$state" "$config"
+  printf 'host instructions\n' > "$host/AGENTS.md"
+  printf '<!-- firstmate-execution-mode: host-root -->\nbrief\n' > "$data/$id/brief.md"
+  touch "$state/.last-watcher-beat"
+  orca_case cwd-refusal
+  printf '1\n' > "$RESP/1.exit"
+  printf '{"ok":true,"result":{"repo":{"id":"repo-cwd"}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"worktree":{"id":"wt-cwd","path":"%s"},"terminal":{"handle":"term-cwd"}}}\n' "$wt" > "$RESP/3.out"
+  out=$(cd "$host" && PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" FM_ORCA_CWD_PATH="$host" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$TMP_ROOT/cwd-home" FM_HOST_ROOT="$host" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend orca 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "host-root Orca spawn accepted a terminal outside the target worktree"
+  assert_contains "$out" "did not enter FM_TARGET_WORKTREE $wt" \
+    "wrong Orca terminal cwd refusal did not explain the target requirement"
+  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''close' \
+    "wrong Orca terminal cwd did not attempt to close the created endpoint"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm' \
+    "wrong Orca terminal cwd recycled the worktree without confirmed endpoint absence"
+  assert_present "$state/$id.meta" "unconfirmed cleanup lost recovery metadata"
+  pass "fm-spawn.sh --backend orca: refuses a wrong target cwd and preserves uncertain cleanup"
 }
 
 test_spawn_refuses_orca_secondmate_before_home_mutation() {
@@ -1440,6 +1507,7 @@ test_worktree_create_defers_pathless_cleanup_to_verified_rollback
 test_spawn_preserves_pathless_orca_worktree_when_terminal_stop_is_unknown
 test_spawn_preserves_pathless_orca_worktree_without_terminal_proof
 test_spawn_writes_orca_metadata_and_launches_harness
+test_host_root_spawn_refuses_wrong_orca_terminal_cwd
 test_spawn_refuses_orca_secondmate_before_home_mutation
 test_spawn_refuses_orca_when_runtime_not_ready
 test_spawn_refuses_orca_nonisolated_worktree

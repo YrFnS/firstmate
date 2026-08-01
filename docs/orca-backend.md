@@ -52,7 +52,7 @@ Exact command flags and response parsing are owned by `bin/backends/orca.sh` and
 `fm-send.sh` types and verifies composer clearance, follows `oldestCursor` when Orca returns a limited page, and retries Enter without retyping when a slash popup first fills an argument placeholder.
 A bare shell row is `unknown`, not an empty agent composer.
 The watcher has no native Orca busy signal and uses the shared terminal-tail fallback.
-In host-root mode, spawn verifies the terminal's physical cwd after moving it to `FM_HOST_ROOT`, then launches with the Orca worktree retained as `FM_TARGET_WORKTREE`.
+In host-root mode, spawn keeps the terminal in the verified Orca worktree and launches with that cwd retained as `FM_TARGET_WORKTREE`; only the primary supervisor runs from `FM_HOST_ROOT`.
 
 Cleanup keeps all shared Firstmate safety checks.
 A scout still requires its report and completed decision inventory.

@@ -208,18 +208,19 @@ test_brief_variants() {
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane-host alpha >/dev/null 2>&1)
   brief="$home/data/lane-host/brief.md"
   assert_grep '<!-- firstmate-execution-mode: host-root -->' "$brief" "host brief marker missing"
-  assert_contains "$(cat "$brief")" "$host" "host brief corrupted the literal host path"
-  # shellcheck disable=SC2016  # Assertions intentionally match literal worker variables.
-  assert_contains "$(cat "$brief")" 'git -C "$FM_TARGET_WORKTREE"' "host brief does not scope Git to the target"
-  assert_grep 'Read the target worktree root instructions' "$brief" "host brief does not require target instructions"
-  assert_grep 'top-level process cwd at the host root' "$brief" "host brief does not preserve host cwd"
+  assert_contains "$(cat "$brief")" "$host" "host brief corrupted the literal supervisor path"
+  assert_grep 'process starts inside the isolated target worktree' "$brief" "host brief does not preserve the target cwd"
+  assert_grep "target repository's root instructions" "$brief" "host brief does not require target instructions"
+  # shellcheck disable=SC2016  # Assertions intentionally match literal worker variables and Markdown code spans.
+  assert_contains "$(cat "$brief")" 'Do not read or modify `$FM_HOST_ROOT`' "host brief does not keep unrelated host context out"
   # shellcheck disable=SC2016
-  assert_contains "$(cat "$brief")" '(cd "$FM_TARGET_WORKTREE" && no-mistakes doctor)' "host brief does not scope no-mistakes setup"
+  assert_grep 'Run `no-mistakes doctor`' "$brief" "host brief does not use target-native no-mistakes setup"
   # shellcheck disable=SC2016
-  assert_contains "$(cat "$brief")" '(cd "$FM_TARGET_WORKTREE" && no-mistakes axi run --help)' "host brief does not scope no-mistakes help"
+  assert_contains "$(cat "$brief")" '`no-mistakes axi run --help`' "host brief does not use target-native no-mistakes help"
   # shellcheck disable=SC2016
-  assert_contains "$(cat "$brief")" '(cd "$FM_TARGET_WORKTREE" && no-mistakes axi respond ...)' "host brief does not scope no-mistakes responses"
-  assert_no_grep '`no-mistakes axi' "$brief" "host brief leaves a bare no-mistakes CLI command"
+  assert_contains "$(cat "$brief")" '`no-mistakes axi respond`' "host brief does not use target-native no-mistakes responses"
+  # shellcheck disable=SC2016
+  assert_not_contains "$(cat "$brief")" '(cd "$FM_TARGET_WORKTREE"' "host brief still wraps target commands from the supervisor cwd"
 
   FM_HOME="$normal_home" "$ROOT/bin/fm-brief.sh" lane-normal 'alpha & beta' >/dev/null 2>&1
   assert_no_grep 'firstmate-execution-mode: host-root' "$normal_home/data/lane-normal/brief.md" "default brief changed execution mode"
@@ -432,7 +433,7 @@ test_host_scout_records_logical_project_mode() {
 }
 
 test_spawn_separates_roots() {
-  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file socket out status=0 before after tree_line cd_line launch_line
+  local host="$TMP/spawn & host" home="$TMP/spawn home's & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file socket out status=0 before after tree_line launch_line
   make_host "$host"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   fm_git_init_commit "$project"
@@ -460,13 +461,13 @@ test_spawn_separates_roots() {
   assert_contains "$(cat "$log")" "FM_TARGET_WORKTREE='$wt'" "child launch did not export exact target worktree"
   assert_contains "$(cat "$log")" "FM_HOST_ROOT='$host'" "child launch did not export exact host root"
   assert_contains "$(cat "$log")" 'notify=[' "Codex FirstMate turn-end safeguard was not retained"
-  [ "$(cat "$current")" = "$host" ] || fail "endpoint did not finish at physical host root"
+  [ "$(cat "$current")" = "$wt" ] || fail "endpoint did not remain at the isolated target worktree"
   tree_line=$(grep -nF 'treehouse get' "$log" | head -1 | cut -d: -f1)
-  cd_line=$(grep -nF 'cd --' "$log" | head -1 | cut -d: -f1)
   launch_line=$(grep -nF 'FM_TARGET_WORKTREE=' "$log" | head -1 | cut -d: -f1)
-  [ "$tree_line" -lt "$cd_line" ] && [ "$cd_line" -lt "$launch_line" ] || fail "spawn order was not worktree then host root then harness"
-  (cd "$host" && PATH="$fb:$PATH" FM_WORKER_OBS="$obs" FM_CODEX_ARGV="$argv" bash -c "$(cat "$launch")")
-  assert_grep "cwd=$host" "$obs" "worker harness did not start from the host root"
+  [ "$tree_line" -lt "$launch_line" ] || fail "spawn order was not worktree then harness"
+  assert_no_grep 'cd --' "$log" "spawn returned the worker endpoint to the supervisor host"
+  (cd "$wt" && PATH="$fb:$PATH" FM_WORKER_OBS="$obs" FM_CODEX_ARGV="$argv" bash -c "$(cat "$launch")")
+  assert_grep "cwd=$wt" "$obs" "worker harness did not start from the isolated target worktree"
   assert_grep "host=$host" "$obs" "worker did not receive the exact host root"
   assert_grep "target=$wt" "$obs" "worker did not receive the exact target worktree"
   turnend="$(cd "$home/state" && pwd -P)/lane.turn-ended"
@@ -585,14 +586,12 @@ SH
   pass "unset-mode Herdr retries retain their established same-identity recovery checks"
 }
 
-test_spawn_rejects_host_as_target_and_cleans_failed_transition() {
-  local host="$TMP/refusal-host" home="$TMP/refusal-home" project="$TMP/refusal-target" wt="$TMP/refusal-wt" fb log current tree_log out status=0
+test_spawn_rejects_host_as_target() {
+  local host="$TMP/refusal-host" home="$TMP/refusal-home" project="$TMP/refusal-target" fb log current tree_log out status=0
   make_host "$host"
-  mkdir -p "$home/data/host-target" "$home/data/move-fail" "$home/state" "$home/config"
+  mkdir -p "$home/data/host-target" "$home/state" "$home/config"
   fm_git_init_commit "$project"
-  git -C "$project" worktree add -q --detach "$wt"
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" host-target target >/dev/null 2>&1)
-  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" move-fail target >/dev/null 2>&1)
   fb=$(make_fakebin "$TMP/fake-refusals")
   log="$TMP/refusals.log"; current="$TMP/refusals.current"; tree_log="$TMP/treehouse.log"
 
@@ -607,20 +606,7 @@ test_spawn_rejects_host_as_target_and_cleans_failed_transition() {
   assert_contains "$(cat "$log")" 'kill-window' "host-as-target refusal leaked its tmux endpoint"
   assert_no_grep 'return --force' "$tree_log" "host-as-target refusal tried to recycle the authoritative host path"
   assert_present "$home/state/host-target.meta" "host-as-target refusal lost recovery metadata for the preserved path"
-
-  : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
-  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    FM_HOST_CWD_ATTEMPTS=1 FM_HOST_CWD_DELAY=0 FM_REFUSE_HOST_MOVE=1 \
-    FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-move-fail \
-    FM_LAUNCH_FILE="$TMP/move-fail.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" \
-    FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" move-fail "$project" codex 2>&1) || status=$?
-  [ "$status" -ne 0 ] || fail "spawn accepted a backend that never entered FM_HOST_ROOT"
-  assert_contains "$out" 'did not enter FM_HOST_ROOT' "host transition failure was not explicit"
-  assert_contains "$(cat "$log")" 'kill-window' "failed host transition leaked its tmux endpoint"
-  assert_grep 'return --force' "$tree_log" "failed host transition did not return the acquired worktree"
-  assert_absent "$home/state/move-fail.meta" "successful transition cleanup left recovery metadata"
-  pass "host overlap preserves the path while ordinary transition failures clean their resources"
+  pass "host overlap preserves the authoritative host path"
 }
 
 test_orca_active_cwd_probe() {
@@ -1364,7 +1350,7 @@ test_host_scout_records_logical_project_mode
 test_spawn_separates_roots
 test_duplicate_spawn_preserves_existing_task
 test_unset_herdr_retry_reaches_existing_identity_checks
-test_spawn_rejects_host_as_target_and_cleans_failed_transition
+test_spawn_rejects_host_as_target
 test_orca_active_cwd_probe
 test_all_harnesses_add_one_task_safeguard
 test_mutators_require_host_cwd

@@ -48,7 +48,7 @@ Never add an agent name as a commit co-author.
 
 `docs/configuration.md` is the single owner of the top-level operational-home layout and configuration schemas; each producing script's header and help own exact child fields and mutation mechanics.
 `FM_HOME` selects an instance's private `data/`, `state/`, `config/`, and `projects/`, while scripts continue to come from their tracked code root.
-Optional `FM_HOST_ROOT` keeps another repository authoritative for instructions, lifecycle, and cwd while ordinary task edits stay under explicit `FM_TARGET_WORKTREE`; `docs/configuration.md` owns the four-root contract.
+Optional `FM_HOST_ROOT` keeps another repository authoritative for the primary supervisor's instructions, lifecycle, and cwd while ordinary workers launch from their isolated `FM_TARGET_WORKTREE`; `docs/configuration.md` owns the four-root contract.
 Each secondmate has a persistent isolated `FM_HOME`, including its own state, backlog, projects, and session lock, and secondmate launches clear any inherited host-root variables.
 `bin/fm-send.sh` fails closed unless `FM_HOME` is explicit, so a steer cannot silently resolve against another home.
 
