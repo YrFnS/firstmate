@@ -942,7 +942,7 @@ EOF
             printf '%s' "$h" > "$sf"
             wake "stale: $ref"
           fi
-        elif stale_is_terminal "$ref" "$STATE"; then
+        elif stale_is_terminal "$ref" "$STATE" "$task"; then
           # The log's last line is captain-relevant - but that alone is not
           # proof the crew is actually done: a crew's own status log gets no
           # new entry once firstmate hands it to a no-mistakes validation
