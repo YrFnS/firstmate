@@ -110,7 +110,8 @@ tests/fm-kimi-harness.test.sh
 ```
 
 The integrated path was reverified on 2026-08-01 through Herdr 0.7.5 and Treehouse 2.0.0.
-The worker launched from the isolated target worktree, read target instructions natively, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the supervisor stayed rooted in the unchanged host repository.
+The worker launched from the isolated target worktree, read target instructions natively, completed the decision inventory, emitted its completion status and turn-end signal, retained the report, and cleaned up while the supervisor stayed rooted in the unchanged host repository.
+Because the Codex worker has no verified semantic state source, `fm-crew-state` remained `unknown` instead of treating those notification artifacts as current-state truth.
 [`runtime-backends.md`](runtime-backends.md#host-root-task-routing) owns the exact spawn command and path-routing evidence.
 
 Pi 0.82.1 verified the one-host global activator on 2026-07-29 and the host-root worker exclusion on 2026-07-30.

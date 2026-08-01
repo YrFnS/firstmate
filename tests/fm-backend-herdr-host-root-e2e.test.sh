@@ -93,6 +93,8 @@ for _ in $(seq 1 100); do
 done
 [ -s "$OBS" ] || fail "worker did not publish host-root observations"
 [ -e "$HOME_ROOT/state/$ID.turn-ended" ] || fail "worker completion lifecycle signal was absent"
+assert_line "$HOME_ROOT/state/$ID.status" "done: real Herdr host-root worker completed" \
+  "worker completion status signal was absent"
 
 META="$HOME_ROOT/state/$ID.meta"
 [ -f "$META" ] || fail "spawn did not publish task metadata"
@@ -114,10 +116,8 @@ assert_line "$META" "host_root=$HOST_REAL" "metadata did not retain host authori
 [ -f "$WT/worker-edit.txt" ] || fail "worker edit did not stay in the target worktree"
 STATE_OUT=$(cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
   "$ROOT/bin/fm-crew-state.sh" "$ID")
-case "$STATE_OUT" in
-  'state: done'* ) ;;
-  *) fail "completion did not reconcile to done: $STATE_OUT" ;;
-esac
+[ "$STATE_OUT" = "state: unknown · source: pane · harness state unavailable (unknown codex-unverified)" ] \
+  || fail "Codex completion signal bypassed semantic busy-state uncertainty: $STATE_OUT"
 
 (cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
   "$ROOT/bin/fm-decision-hold.sh" complete "$ID" --none >/dev/null) \
