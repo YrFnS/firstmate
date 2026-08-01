@@ -212,26 +212,25 @@ Host mode separates four roots:
 
 - `FM_ROOT` is the tracked FirstMate code, skill, documentation, and script root.
 - `FM_HOME` is the private FirstMate operational home that owns `data/`, `state/`, `config/`, and `projects/`.
-- `FM_HOST_ROOT` is the host repository whose instructions, native lifecycle, and cwd remain authoritative.
-- `FM_TARGET_WORKTREE` is the per-task isolated target repository where code changes, Git operations, tests, builds, forge operations, and no-mistakes run.
+- `FM_HOST_ROOT` is the host repository whose instructions, native lifecycle, and cwd remain authoritative for the primary supervisor.
+- `FM_TARGET_WORKTREE` is the per-task isolated target repository and ordinary worker cwd where target instructions, code changes, Git operations, tests, builds, forge operations, and no-mistakes run.
 
 The physical target worktree must differ from the target project's primary checkout and must not overlap `FM_HOST_ROOT`.
-Ordinary ship and scout endpoints still acquire and validate their isolated target worktree first, retain it as `worktree=` metadata, then return the endpoint shell to the physical host root before launching the harness.
-A failed host transition stops and verifies the new endpoint before returning the acquired worktree, removes every task-owned pre-record artifact on successful rollback, and retains recovery metadata and the isolated path when endpoint termination or resource cleanup cannot be confirmed.
+Ordinary ship and scout endpoints acquire and validate their isolated target worktree, retain it as `worktree=` metadata, and launch the harness there.
 An overlap refusal stops the endpoint but never returns or removes the overlapping path automatically.
 An unconfirmed final launch submission retains the endpoint, worktree, task safeguards, and metadata because the worker may already be running.
-The child receives exact `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` values, while task actions bind to the recorded physical `host_root=` before reading or changing task data and review, merge, evidence, and teardown continue to use the recorded `worktree=` path.
+The child receives exact `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` values, while the worker stays rooted in the target and supervisor task actions bind to the recorded physical `host_root=` before reading or changing task data.
+Review, merge, evidence, and teardown continue to use the recorded `worktree=` path.
 Teardown stops and verifies the recorded worker endpoint before changing or returning its isolated copy.
 Every non-forced host-root ship teardown repeats worktree safety checks after the endpoint is confirmed stopped and before branch deletion or worktree return.
-Host-root briefs carry `<!-- firstmate-execution-mode: host-root -->`, require the worker to read host instructions first and applicable target instructions before edits, keep the host read-only except for host-owned lifecycle effects, and require explicit target paths or scoped subshells.
-The same target scoping applies to the complete no-mistakes lifecycle, including doctor, initialization, run, gate responses, and follow-up help commands; no validation command may default to the host cwd.
-Spawn rejects a cwd-relative legacy brief in host mode rather than weakening that contract silently.
+Host-root briefs carry `<!-- firstmate-execution-mode: host-root -->`, require the worker to verify its target cwd and read applicable target instructions, and keep the unrelated host context out of the worker session.
+Spawn rejects a legacy brief without that marker rather than weakening the contract silently.
 Host-root ship brief generation and spawn support `no-mistakes` and `direct-PR` delivery but reject `local-only` because its guarded landing path changes the target project's primary checkout.
 Host-root scouts may inspect `local-only` targets and retain their configured mode and autonomy, but promotion rejects them while that mode remains active.
 
-Harness integration is additive.
-The [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md#host-root-task-integration) owns each harness's task-signal shape; none writes or replaces host hook configuration, and each signal is installed once.
-The host repository's own lifecycle hooks continue to load from the host cwd.
+Harness integration is additive for the primary supervisor and target-native for ordinary workers.
+The [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md#host-root-task-integration) owns each harness's task-signal shape, and each signal is installed once.
+The host repository's lifecycle hooks remain limited to the supervisor session; target project hooks load from the worker cwd.
 Host-root ordinary tasks reject raw launch commands because an unverified command cannot guarantee the required task completion safeguard.
 
 Secondmates are intentionally outside host-root mode.
@@ -507,8 +506,8 @@ Runtime tuning via environment variables (defaults shown):
 
 ```sh
 FM_HOME=                 # optional operational home for most scripts, unset means this repo root; fm-send requires it explicitly
-FM_HOST_ROOT=            # optional physical host instruction root and primary/ordinary-worker cwd; unset preserves normal behavior
-FM_TARGET_WORKTREE=      # spawn-owned exact isolated target path for a host-root worker; secondmates clear it
+FM_HOST_ROOT=            # optional physical host instruction root and primary-supervisor cwd; unset preserves normal behavior
+FM_TARGET_WORKTREE=      # spawn-owned exact isolated target path and ordinary-worker cwd; secondmates clear it
 FM_ROOT_OVERRIDE=        # override firstmate repo root, tangle-guard target, and zellij/cmux home-title hash; also legacy whole-root override when FM_HOME is unset
 FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests

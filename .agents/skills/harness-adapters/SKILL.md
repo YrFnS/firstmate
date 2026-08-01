@@ -106,20 +106,19 @@ When changing any primary watcher adapter, update `docs/supervision-protocols/`,
 
 ## Host-root task integration
 
-When `FM_HOST_ROOT` is set for an ordinary ship or scout, the harness starts from that physical host root and receives the isolated target separately as `FM_TARGET_WORKTREE`.
-The host's discovered instructions and lifecycle adapters remain authoritative; target instructions are read explicitly under the host-root brief before edits.
-FirstMate adds exactly one task turn-end signal without writing host configuration:
+When `FM_HOST_ROOT` is set, only the primary supervisor starts from that physical host root.
+Ordinary ship and scout harnesses start from their isolated `FM_TARGET_WORKTREE`, so the target repository's instructions and lifecycle adapters load natively while the host context stays out of focused worker sessions.
+FirstMate retains one task completion signal per harness and passes the host and target identities for supervision and recovery without changing the worker cwd:
 
-| Harness | Additive task signal in host-root mode |
+| Harness | Task completion signal in host-root mode |
 |---|---|
-| claude | An additional state-owned settings file passed with `--settings`; Claude continues loading host project settings. |
-| codex | The existing per-launch `notify` command; host `.codex/hooks.json` remains untouched. |
-| opencode | A state-owned task plugin named through `OPENCODE_CONFIG_CONTENT`; host project plugins continue to auto-load from the launch cwd. |
-| pi | The existing explicit state-owned `-e` task extension; host project extensions continue to auto-load after host trust. |
-| grok | The guarded global FirstMate Stop hook reads a per-process `FM_GROK_TURNEND_TOKEN`; host project hooks remain untouched and no pointer is written into the host repository. |
-| kimi | The guarded global FirstMate Stop hook reads a per-process `FM_KIMI_TURNEND_TOKEN`; host configuration remains otherwise untouched and no pointer is written into the host repository. |
+| claude | A state-owned settings file passed with `--settings`; target project settings still load from the worker cwd. |
+| codex | The existing per-launch `notify` command. |
+| opencode | A state-owned task plugin named through `OPENCODE_CONFIG_CONTENT`; target project plugins load from the worker cwd. |
+| pi | The existing explicit state-owned `-e` task extension; target project extensions remain subject to target trust. |
+| grok | The guarded global FirstMate Stop hook reads a per-process `FM_GROK_TURNEND_TOKEN`. |
+| kimi | The guarded global FirstMate Stop hook reads a per-process `FM_KIMI_TURNEND_TOKEN`. |
 
-Default worktree-root launches retain their existing hook locations and command shapes.
 Secondmate launches explicitly clear inherited `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` and retain their isolated-home adapters.
 
 [`docs/verification/supervision.md`](../../../docs/verification/supervision.md#host-root-task-integration) owns the dated lifecycle evidence and current live-verification limits for these task adapters.
@@ -343,7 +342,7 @@ The tmux backend's structural `fm_tmux_composer_state` read sees placeholder-fil
 The Herdr adapter (`fm_backend_herdr_composer_state`, `bin/backends/herdr.sh`) classifies the composer's own row structurally instead of diffing raw content; see `docs/herdr-backend.md` "Composer and injection safety" for the current boundary and `tests/fm-backend-herdr.test.sh` for regression coverage.
 
 Startup dialog: the "Run Grok Build in a project directory?" project picker appears ONLY when grok is launched from a non-project directory (home, Desktop, Downloads, `/tmp`).
-Default `fm-spawn` launches inside the treehouse worktree, while host-root mode launches from `FM_HOST_ROOT`; either launch root must be a recognized project directory to avoid the picker.
+Every ordinary `fm-spawn`, including host-root mode, launches inside the isolated target worktree, which must be a recognized project directory to avoid the picker.
 Pin `[hints] project_picker_disabled = true` in `~/.grok/config.toml` if a non-project launch ever needs to skip it.
 
 **TRUECOLOR placeholder styling: covered (task afk-herdr-false-pending, 2026-07-10).**
