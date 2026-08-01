@@ -132,8 +132,8 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 ## Worktrees, not branches in your checkout
 
-The default launch cwd remains the isolated task worktree.
-The optional host-root exception is owned by [configuration.md's four-root runtime contract](configuration.md#host-root-mode-fm_host_root).
+Every ordinary worker launches from its isolated task worktree.
+The optional host-root mode changes the primary supervisor's instruction root without changing that worker-cwd invariant; [configuration.md's four-root runtime contract](configuration.md#host-root-mode-fm_host_root) owns the details.
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
