@@ -145,8 +145,8 @@
 #   refuses the spawn rather than risking a PR based on stale history.
 #   With optional
 #   FM_HOST_ROOT set, validation happens before the guard or endpoint mutation;
-#   the endpoint then returns to that physical host cwd and the child receives
-#   the isolated target as FM_TARGET_WORKTREE. Failed spawns before launch submission
+#   the supervisor remains rooted at the host while each ordinary worker launches
+#   from its isolated target worktree with that path in FM_TARGET_WORKTREE. Failed spawns before launch submission
 #   stop and verify the endpoint before returning the isolated copy, remove task-owned
 #   pre-record artifacts on success, and retain recovery metadata when rollback is
 #   incomplete. An ambiguous final Enter retains the endpoint, worktree, and metadata.
@@ -2548,19 +2548,10 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
 
-if [ "$HOST_MODE" -eq 1 ]; then
-  HOST_CWD_ATTEMPTS=${FM_HOST_CWD_ATTEMPTS:-30}
-  HOST_CWD_DELAY=${FM_HOST_CWD_DELAY:-1}
-  case "$HOST_CWD_ATTEMPTS" in ''|*[!0-9]*|0) HOST_CWD_ATTEMPTS=30 ;; esac
-  spawn_send_text_line "$T" "cd -- $(shell_quote "$HOST_ROOT")"
-  for _ in $(seq 1 "$HOST_CWD_ATTEMPTS"); do
-    p=$(spawn_current_path "$T" || true)
-    [ "$(real_path_or_raw "$p")" = "$HOST_ROOT" ] && break
-    p=
-    sleep "$HOST_CWD_DELAY"
-  done
-  if [ -z "${p:-}" ] || [ "$(real_path_or_raw "$p")" != "$HOST_ROOT" ]; then
-    echo "error: backend endpoint did not enter FM_HOST_ROOT $HOST_ROOT; inspect target $T" >&2
+if [ "$HOST_MODE" -eq 1 ] && [ "$BACKEND" = orca ]; then
+  p=$(spawn_current_path "$T" || true)
+  if [ "$(real_path_or_raw "$p")" != "$(real_path_or_raw "$WT")" ]; then
+    echo "error: Orca endpoint did not enter FM_TARGET_WORKTREE $WT; inspect target $T" >&2
     exit 1
   fi
 fi

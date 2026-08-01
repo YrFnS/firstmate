@@ -228,8 +228,9 @@ tests/fm-grok-harness.test.sh
 tests/fm-kimi-harness.test.sh
 ```
 
-A rebased Codex 0.145.0 scout repeated the integrated path on 2026-07-26 through tmux 3.7b.
-It loaded the host and target instruction surfaces, preserved the separate target worktree, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the host's native startup lifecycle remained active.
+The integrated path was reverified on 2026-08-01 through Herdr 0.7.5 and Treehouse 2.0.0.
+The worker launched from the isolated target worktree, read target instructions natively, completed the decision inventory, emitted its task completion, retained the report, and cleaned up while the supervisor stayed rooted in the unchanged host repository.
+The earlier 2026-07-26 host-cwd worker evidence is superseded.
 [`runtime-backends.md`](runtime-backends.md#host-root-task-routing) owns the exact spawn command and path-routing evidence.
 
 Pi 0.82.1 verified the one-host global activator on 2026-07-29 and the host-root worker exclusion on 2026-07-30.

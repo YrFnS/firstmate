@@ -207,8 +207,8 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 
 ### Host-root task routing
 
-The rebased host-root path was live-verified on 2026-07-26 with tmux 3.7b, Treehouse 2.0.0, and Codex CLI 0.145.0 on Linux.
-The command shape was:
+The host-root path was reverified on 2026-08-01 with Herdr 0.7.5 and Treehouse 2.0.0 through the real isolated acceptance after ordinary workers moved back to their target worktree cwd.
+The supervisor-side invocation shape remains:
 
 ```sh
 cd "$host"
@@ -221,9 +221,17 @@ FM_BACKEND=tmux \
     --harness codex --scout
 ```
 
-The worker observed its physical cwd equal to `FM_HOST_ROOT`, its target Git root equal to the physical `FM_TARGET_WORKTREE`, and the target as a detached linked worktree distinct from the clean primary checkout.
-It loaded the host and target `AGENTS.md` files, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
-The host's native startup lifecycle remained active, so host-owned lifecycle effects were allowed rather than treated as task edits.
+The worker observed its physical cwd, target Git root, and `FM_TARGET_WORKTREE` all equal to the detached isolated target worktree, distinct from the clean primary checkout and `FM_HOST_ROOT`.
+It read the target `AGENTS.md` natively from that cwd, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
+The supervisor remained rooted in the host repository, which stayed clean and did not enter the worker context.
+The earlier 2026-07-26 live evidence with workers launched from `FM_HOST_ROOT` is superseded by this target-root contract.
+
+Current entry point and observed output:
+
+```sh
+bash tests/fm-backend-herdr-host-root-e2e.test.sh
+# ok - real Herdr host-root spawn, completion, decision inventory, and teardown
+```
 
 ## Herdr
 
