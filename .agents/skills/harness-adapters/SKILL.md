@@ -321,8 +321,8 @@ Accept with Enter.
 The decision persists per path in `~/.pi/agent/trust.json`, so later spawns in the same worktree slot skip it.
 
 `fm-spawn` keeps the completion extension in `state/`, outside the worktree, because project-local extension files make the trust gate strictly worse and pollute the project.
-The extension records semantic busy state at `agent_start`, then uses `agent_settled` with `ctx.isIdle()` to record idle and notify the supervisor only after Pi has no queued continuation.
-Do not notify from `turn_end`: it fires at inner response boundaries and repeatedly wakes the supervisor while one logical worker run continues.
+In host-root mode, the extension records semantic busy state at `agent_start`, then uses `agent_settled` with `ctx.isIdle()` to record idle before notifying the supervisor after Pi has no queued continuation.
+Ordinary Pi workers retain their existing `turn_end` notification, while host-root workers keep it silent because it fires at inner response boundaries during one logical worker run.
 Pi sets `PI_CODING_AGENT=true` for its children; this is its harness-detection env marker.
 
 **Primary-session guard fact (verified 2026-07-09, Pi 0.80.5).**
