@@ -800,6 +800,7 @@ write_abort_meta() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   {
     echo "window=${T:-${W:-fm-$ID}}"
+    echo "endpoint_task_id=$ID"
     echo "worktree=${WT:-}"
     [ "${HOST_MODE:-0}" -eq 0 ] || echo "host_root=$HOST_ROOT"
     echo "project=${PROJ_ABS:-}"
