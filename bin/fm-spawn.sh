@@ -1867,22 +1867,22 @@ EOF
       # loaded from inside the project (verified live), but an explicit -e path
       # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
       cat > "$STATE/$ID.pi-ext.ts" <<EOF
-// Firstmate semantic busy-state events + settled-run notification; written by
+// Firstmate semantic busy-state events + completion notification; written by
 // fm-spawn under the contract owned by bin/fm-busy-lib.sh.
 // Semantic state: "agent_start" -> busy when a low-level agent run begins;
 // "agent_settled" -> idle only when ctx.isIdle() confirms Pi will not
 // continue automatically - auto-retries, auto-compaction retries, tool
 // loops, and queued continuations all keep the run un-settled, and a settle
 // that raced another extension's fresh run keeps state busy via isIdle().
-// The notification is touched only after that idle state is recorded, so inner
-// turn boundaries never wake the supervisor as false worker completions.
+// Host-root mode notifies only after that idle state is recorded; normal mode
+// retains the existing per-turn notification.
 import { execFile } from "node:child_process";
 const busyEvent = (state: string, event: string) =>
-  new Promise<void>((resolve) => {
+  new Promise<boolean>((resolve) => {
     execFile("$FM_ROOT/bin/fm-busy-event.sh", [
       "apply", "$STATE_REAL", "$ID", state,
       "--gen", "$BUSY_GEN", "--source", "pi-ext", "--event", event,
-    ], () => resolve());
+    ], (error) => resolve(!error));
   });
 const notifySettled = () =>
   new Promise<void>((resolve) => execFile("touch", ["$TURNEND"], () => resolve()));
@@ -1890,9 +1890,9 @@ export default function (pi: any) {
   pi.on("agent_start", () => busyEvent("busy", "agent-start"));
   pi.on("agent_settled", async (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
-    await busyEvent("idle", "agent-settled");
-    await notifySettled();
+    if (await busyEvent("idle", "agent-settled") && $HOST_MODE === 1) await notifySettled();
   });
+  if ($HOST_MODE === 0) pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
 }
 EOF
       ;;
