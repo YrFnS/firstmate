@@ -208,22 +208,24 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 ### Host-root task routing
 
 The host-root path was verified on 2026-08-01 with Herdr 0.7.5 and Treehouse 2.0.0 through the real isolated acceptance.
-The supervisor-side invocation shape remains:
+The test's supervisor-side spawn shape was:
 
 ```sh
 cd "$host"
-TMUX_TMPDIR="$socket_dir" \
+PATH="$fakebin:$PATH" \
+FM_SPAWN_NO_GUARD=1 \
 FM_ROOT_OVERRIDE="$firstmate_root" \
 FM_HOME="$firstmate_home" \
 FM_HOST_ROOT="$host" \
-FM_BACKEND=tmux \
   "$firstmate_root/bin/fm-spawn.sh" "$task_id" "$target_primary" \
-    --harness codex --scout
+    --harness codex --backend herdr --scout
 ```
 
 The worker observed its physical cwd, target Git root, and `FM_TARGET_WORKTREE` all equal to the detached isolated target worktree, distinct from the clean primary checkout and `FM_HOST_ROOT`.
-It read the target `AGENTS.md` natively from that cwd, completed the decision inventory, wrote the scout report outside both repositories, and cleaned up through `bin/fm-teardown.sh`.
+It read the target `AGENTS.md` natively from that cwd and wrote the scout report outside both repositories.
+After the lifecycle gate, `bin/fm-teardown.sh` closed the exact Herdr pane and returned the isolated worktree.
 The supervisor remained rooted in the host repository, which stayed clean and did not enter the worker context.
+[`supervision.md`](supervision.md#host-root-task-integration) owns the completion-signal and decision-inventory evidence from this acceptance.
 
 Current entry point and observed output:
 
