@@ -161,6 +161,7 @@ SCOUT_STAY_RULE="Stay inside this worktree; the only files you may write outside
 BRANCH_COMMAND="\`git checkout -b fm/$ID\`"
 PROJECT_MEMORY_TARGET="."
 PROJECT_MEMORY_CONTEXT='in the worktree'
+SCOUT_DECISION_GATE="Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review."
 if [ "$HOST_MODE" -eq 1 ]; then
   EXECUTION_MARKER='<!-- firstmate-execution-mode: host-root -->'
   IFS= read -r -d '' EXECUTION_SECTION <<'EOF' || true
@@ -173,6 +174,8 @@ EOF
   EXECUTION_SECTION=${EXECUTION_SECTION%$'\n'}
   EXECUTION_SECTION=${EXECUTION_SECTION//__HOST_ROOT__/$HOST_ROOT}
   CREW_INTRO="$CREW_INTRO"$'\n'"$EXECUTION_MARKER"$'\n'"$EXECUTION_SECTION"
+  SCOUT_DECISION_GATE="$SCOUT_DECISION_GATE
+Run each command required by that skill in a host-scoped subshell through the FirstMate code root, for example \`(cd $(shell_quote "$HOST_ROOT") && $(shell_quote "$FM_ROOT/bin/fm-decision-hold.sh") complete $(shell_quote "$ID") --none)\`. The subshell leaves your worker in the isolated target cwd; replace \`--none\` with unresolved decision keys when required by the skill."
 fi
 
 if [ "$KIND" = secondmate ]; then
@@ -341,7 +344,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
-Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+$SCOUT_DECISION_GATE
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
