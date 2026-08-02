@@ -95,7 +95,7 @@ switch (process.env.MODE) {
     await handlers["agent_settled"]({}, ctx);
     await handlers["agent_start"]({}, ctx);
     break;
-  case "turn-end": await handlers["turn_end"]({}, ctx); break;
+  case "turn-end": if (handlers["turn_end"]) await handlers["turn_end"]({}, ctx); break;
   default: throw new Error("unknown mode " + process.env.MODE);
 }
 if (process.env.MODE === "turn-end") {
@@ -119,26 +119,35 @@ test_pi_extension_semantic_lifecycle() {
 
   rm -f "$state/$id.turn-ended"
   out=$(drive_pi_ext "$ext" turn-end) || fail "turn_end drive failed: $out"
-  [ -f "$state/$id.turn-ended" ] || fail "turn_end no longer touches the notification marker"
+  [ ! -e "$state/$id.turn-ended" ] || fail "an inner turn boundary woke the supervisor before the worker settled"
   out=$(classify pi "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "turn_end must stay a notification, not a state edge, got '$out'"
+  [ "$out" = "busy fm-spawn" ] || fail "turn_end must not change semantic state, got '$out'"
+
+  out=$(drive_pi_ext "$ext" settle-continuing) || fail "continuing settle drive failed: $out"
+  [ ! -e "$state/$id.turn-ended" ] || fail "a queued continuation emitted a false completion notification"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "busy fm-spawn" ] || fail "a settle while another run continues must stay busy, got '$out'"
 
   out=$(drive_pi_ext "$ext" settle-idle) || fail "agent_settled drive failed: $out"
+  [ -f "$state/$id.turn-ended" ] || fail "an idle settled run did not notify the supervisor"
   out=$(classify pi "$id" "$state")
   [ "$out" = "idle pi-ext" ] || fail "agent_settled with isIdle must classify 'idle pi-ext', got '$out'"
 
+  rm -f "$state/$id.turn-ended"
   out=$(drive_pi_ext "$ext" agent-start) || fail "agent_start drive failed: $out"
   out=$(classify pi "$id" "$state")
   [ "$out" = "busy pi-ext" ] || fail "agent_start must classify 'busy pi-ext', got '$out'"
 
-  out=$(drive_pi_ext "$ext" settle-continuing) || fail "continuing settle drive failed: $out"
+  out=$(drive_pi_ext "$ext" settle-continuing) || fail "second continuing settle drive failed: $out"
+  [ ! -e "$state/$id.turn-ended" ] || fail "a continuing run notified the supervisor"
   out=$(classify pi "$id" "$state")
-  [ "$out" = "busy pi-ext" ] || fail "a settle while another run continues must stay busy, got '$out'"
+  [ "$out" = "busy pi-ext" ] || fail "a continuing run must stay busy, got '$out'"
 
   out=$(drive_pi_ext "$ext" settle-idle) || fail "final settle drive failed: $out"
+  [ -f "$state/$id.turn-ended" ] || fail "the final settled run did not notify the supervisor"
   out=$(classify pi "$id" "$state")
   [ "$out" = "idle pi-ext" ] || fail "the final settle must classify idle, got '$out'"
-  pass "pi extension reports agent_start busy, settles idle only via ctx.isIdle(), and keeps turn_end a notification"
+  pass "pi extension keeps inner turns silent and notifies only after the worker settles idle"
 }
 
 test_pi_extension_serializes_settle_before_next_start() {
