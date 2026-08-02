@@ -202,7 +202,7 @@ SH
 }
 
 test_brief_variants() {
-  local host="$TMP/brief & host" home="$TMP/brief-home" brief normal_home="$TMP/normal-home"
+  local host="$TMP/brief & host" home="$TMP/brief-home" brief scout normal_home="$TMP/normal-home"
   make_host "$host"
   mkdir -p "$home/data" "$normal_home/data"
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane-host alpha >/dev/null 2>&1)
@@ -221,6 +221,13 @@ test_brief_variants() {
   assert_contains "$(cat "$brief")" '`no-mistakes axi respond`' "host brief does not use target-native no-mistakes responses"
   # shellcheck disable=SC2016
   assert_not_contains "$(cat "$brief")" '(cd "$FM_TARGET_WORKTREE"' "host brief still wraps target commands from the supervisor cwd"
+
+  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane-host-scout alpha --scout >/dev/null 2>&1)
+  scout="$home/data/lane-host-scout/brief.md"
+  assert_contains "$(cat "$scout")" "(cd '$host' && '$ROOT/bin/fm-decision-hold.sh' complete 'lane-host-scout' --none)" \
+    "host scout brief does not invoke the decision lifecycle through a host-scoped FirstMate command"
+  assert_grep 'subshell leaves your worker in the isolated target cwd' "$scout" \
+    "host scout lifecycle guidance does not preserve the worker target cwd"
 
   FM_HOME="$normal_home" "$ROOT/bin/fm-brief.sh" lane-normal 'alpha & beta' >/dev/null 2>&1
   assert_no_grep 'firstmate-execution-mode: host-root' "$normal_home/data/lane-normal/brief.md" "default brief changed execution mode"
@@ -853,6 +860,12 @@ test_spawn_rollback_is_transactional() {
   assert_contains "$out" 'still exists after stop' "failed endpoint termination was not explicit (backend log: $(tr '\n' ';' < "$log"))"
   assert_no_grep 'return --force' "$tree_log" "rollback reused the isolated copy after unconfirmed termination"
   assert_present "$home/state/rollback-stuck.meta" "failed rollback lost recovery metadata"
+  assert_grep 'endpoint_task_id=rollback-stuck' "$home/state/rollback-stuck.meta" \
+    "failed rollback metadata lost its endpoint task binding"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" bash -c \
+    '. "$1"; fm_backend_validate_task_endpoint "$2" "$3"' _ "$ROOT/bin/fm-backend.sh" \
+    "$home/state/rollback-stuck.meta" rollback-stuck \
+    || fail "failed rollback metadata could not pass endpoint recovery validation"
   assert_present "$home/state/rollback-stuck.pi-ext.ts" "failed rollback discarded a recoverable pre-record artifact"
   assert_present "/tmp/fm-rollback-stuck" "failed rollback discarded its recoverable task temp root"
   rm -rf "/tmp/fm-rollback-stuck"
