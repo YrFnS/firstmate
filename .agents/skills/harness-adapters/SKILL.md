@@ -320,8 +320,9 @@ Project trust dialog can appear on the first pi run in any not-yet-trusted direc
 Accept with Enter.
 The decision persists per path in `~/.pi/agent/trust.json`, so later spawns in the same worktree slot skip it.
 
-`fm-spawn` keeps the turn-end extension in `state/`, outside the worktree, because project-local extension files make the trust gate strictly worse and pollute the project.
-The extension must listen for pi's `turn_end` event, not `agent_end`, so the watcher wakes after each completed turn instead of only when the whole agent run exits.
+`fm-spawn` keeps the completion extension in `state/`, outside the worktree, because project-local extension files make the trust gate strictly worse and pollute the project.
+The extension records semantic busy state at `agent_start`, then uses `agent_settled` with `ctx.isIdle()` to record idle and notify the supervisor only after Pi has no queued continuation.
+Do not notify from `turn_end`: it fires at inner response boundaries and repeatedly wakes the supervisor while one logical worker run continues.
 Pi sets `PI_CODING_AGENT=true` for its children; this is its harness-detection env marker.
 
 **Primary-session guard fact (verified 2026-07-09, Pi 0.80.5).**
