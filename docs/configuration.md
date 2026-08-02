@@ -196,7 +196,7 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 ## Host-root mode (FM_HOST_ROOT)
 
-`FM_HOST_ROOT` is an optional physical instruction root and harness startup cwd for a primary FirstMate home.
+`FM_HOST_ROOT` is an optional physical instruction root and startup cwd for a primary FirstMate supervisor.
 Unset or empty preserves the normal behavior in which FirstMate runs from its tracked code root.
 For Pi, run `bin/fm-host-setup.sh install <host-root> --backend herdr` once, then run plain `pi` from that exact physical host root.
 Use `--home <firstmate-home>` when operational state belongs outside this tracked FirstMate root, and use the script's `status` and `uninstall` actions to inspect or remove the managed activation.
