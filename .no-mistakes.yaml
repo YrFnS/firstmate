@@ -34,7 +34,7 @@ document:
 # security, Herdr, tmux, and lifecycle coverage). A full-suite override here
 # would duplicate CI and defeat the targeted Test contract.
 commands:
-  lint: 'bin/fm-lint.sh'
+  lint: 'bash bin/fm-lint.sh'
 
 # Keep test evidence out of this repo; it stays in a temp dir instead.
 test:
