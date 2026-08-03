@@ -234,6 +234,7 @@ Ordinary ship and scout endpoints acquire and validate their isolated target wor
 An overlap refusal stops the endpoint but never returns or removes the overlapping path automatically.
 An unconfirmed final launch submission retains the endpoint, worktree, task safeguards, and metadata because the worker may already be running.
 The child receives exact `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` values, while the worker stays rooted in the target and supervisor task actions bind to the recorded physical `host_root=` before reading or changing task data.
+For legacy task metadata without `host_root=`, an enabled host-root supervisor instead binds those actions to its validated physical `FM_HOST_ROOT` cwd.
 Review, merge, evidence, and teardown continue to use the recorded `worktree=` path.
 Teardown stops and verifies the recorded worker endpoint before changing or returning its isolated copy.
 Every non-forced host-root ship teardown repeats worktree safety checks after the endpoint is confirmed stopped and before branch deletion or worktree return.
