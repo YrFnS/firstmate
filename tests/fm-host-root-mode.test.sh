@@ -813,10 +813,11 @@ test_secondmate_actions_keep_supervisor_host_authority() {
 }
 
 test_spawn_rollback_is_transactional() {
-  local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" uncertain_wt="$TMP/rollback-uncertain-wt" retained_wt="$TMP/rollback-retained-wt" unset_wt="$TMP/rollback-unset-wt" fb log current tree_log out status=0
+  local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" scout_wt="$TMP/rollback-scout-wt" uncertain_wt="$TMP/rollback-uncertain-wt" retained_wt="$TMP/rollback-retained-wt" unset_wt="$TMP/rollback-unset-wt" fb log current tree_log out status=0
   make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
   git -C "$project" worktree add -q --detach "$stuck_wt"
+  git -C "$project" worktree add -q --detach "$scout_wt"
   git -C "$project" worktree add -q --detach "$uncertain_wt"
   git -C "$project" worktree add -q --detach "$retained_wt"
   git -C "$project" worktree add -q --detach "$unset_wt"
@@ -824,6 +825,8 @@ test_spawn_rollback_is_transactional() {
     (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
       "$ROOT/bin/fm-brief.sh" "$id" target --mode no-mistakes >/dev/null 2>&1)
   done
+  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    "$ROOT/bin/fm-brief.sh" rollback-scout target --scout >/dev/null 2>&1)
   fb=$(make_fakebin "$TMP/fake-rollback")
   printf '#!/usr/bin/env bash\nexit 99\n' > "$fb/node"
   chmod +x "$fb/node"
@@ -881,6 +884,19 @@ test_spawn_rollback_is_transactional() {
   assert_present "/tmp/fm-rollback-stuck" "failed rollback discarded its recoverable task temp root"
   rm -rf "/tmp/fm-rollback-stuck"
   rm -f "$home/state/rollback-stuck.meta" "$home/state/rollback-stuck.pi-ext.ts" "$current.endpoint"
+
+  : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-rollback-scout FM_LAUNCH_FILE="$TMP/rollback-scout.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$scout_wt" FM_HOST_PATH="$host" \
+    FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-scout "$project" pi --scout 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "injected scout stop failure unexpectedly succeeded"
+  assert_present "$home/state/rollback-scout.meta" "failed scout rollback lost recovery metadata"
+  assert_no_grep '^mode=' "$home/state/rollback-scout.meta" "failed scout rollback fabricated a delivery mode"
+  assert_no_grep '^yolo=' "$home/state/rollback-scout.meta" "failed scout rollback fabricated delivery authority"
+  rm -rf "/tmp/fm-rollback-scout"
+  rm -f "$home/state/rollback-scout.meta" "$home/state/rollback-scout.pi-ext.ts" "$current.endpoint"
 
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
@@ -1197,6 +1213,65 @@ SH
   pass "forced secondmate teardown preserves tmux aliases and projected Herdr children during recursive cleanup"
 }
 
+test_secondmate_force_teardown_closes_host_root_herdr_child() {
+  local case_root="$TMP/recursive-host-herdr-child" home subhome childproj childwt host fb log current tree_log closed status=0 out
+  home="$case_root/home"
+  subhome="$case_root/subhome"
+  childproj="$subhome/projects/alpha"
+  childwt="$case_root/child-worktree"
+  host="$case_root/host"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$subhome/state" "$host"
+  : > "$host/AGENTS.md"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  fm_write_meta "$home/state/domain.meta" \
+    'window=test-session:fm-domain' "worktree=$subhome" "project=$subhome" \
+    'harness=echo' 'kind=secondmate' 'mode=secondmate' "home=$subhome" 'projects=alpha'
+  fm_write_meta "$subhome/state/child.meta" \
+    'window=child-session:w1:p2' 'endpoint_task_id=child' "worktree=$childwt" "project=$childproj" \
+    "host_root=$host" 'backend=herdr' 'herdr_session=child-session' \
+    'herdr_workspace_id=w1' 'herdr_tab_id=w1:t2' 'herdr_pane_id=w1:p2' \
+    'harness=echo' 'kind=ship' 'mode=no-mistakes'
+  fb=$(make_fakebin "$case_root/fake")
+  cat > "$fb/herdr" <<SH
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "\$*" >> "\${FM_FAKE_HERDR_LOG:?}"
+case "\${1:-} \${2:-}" in
+  "session list") printf '%s\n' '{"sessions":[{"name":"child-session","running":true,"socket_path":"$case_root/child.sock"}]}' ;;
+  "workspace list") exit 1 ;;
+  "pane close") : > "\${FM_FAKE_HERDR_CLOSED:?}" ;;
+  "pane get")
+    if [ -e "\${FM_FAKE_HERDR_CLOSED:?}" ]; then
+      printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
+      exit 1
+    fi
+    printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"}}}'
+    ;;
+esac
+SH
+  chmod +x "$fb/herdr"
+  log="$case_root/backend.log"
+  current="$case_root/current"
+  tree_log="$case_root/treehouse.log"
+  closed="$case_root/closed"
+  printf '%s\n' "$subhome" > "$current"
+  : > "$current.endpoint"
+  : > "$log"
+  : > "$tree_log"
+  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    FM_ENDPOINT_TARGET=test-session:fm-domain FM_LAUNCH_FILE="$case_root/unused.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$childwt" FM_HOST_PATH="$host" \
+    FM_TREEHOUSE_LOG="$tree_log" "$ROOT/bin/fm-teardown.sh" domain --force 2>&1) || status=$?
+  expect_code 0 "$status" "forced secondmate teardown failed to close a host-root Herdr child: $out"
+  assert_present "$closed" "recursive host-root Herdr cleanup did not close the child pane"
+  assert_grep 'pane close w1:p2' "$log" "recursive host-root Herdr cleanup did not use the serialized exact-pane close"
+  assert_absent "$subhome" "recursive host-root Herdr cleanup retained the empty secondmate home"
+  assert_absent "$home/state/domain.meta" "recursive host-root Herdr cleanup retained parent metadata"
+  pass "forced secondmate teardown closes host-root Herdr children under the preflight lock"
+}
+
 test_secondmate_force_teardown_refuses_recursive_host_overlap_before_mutation() {
   local case_root="$TMP/recursive-host-overlap" home subhome childproj host fb log current tree_log out status=0
   home="$case_root/home"
@@ -1330,6 +1405,20 @@ test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
     "$ROOT/bin/fm-spawn.sh" mate-unset "$subhome" codex --secondmate >/dev/null 2>&1)
   assert_not_contains "$(cat "$launch")" 'FM_HOST_ROOT=' "unset-mode secondmate launch changed its historical environment prefix"
   assert_not_contains "$(cat "$launch")" 'FM_TARGET_WORKTREE=' "unset-mode secondmate launch set a new empty target variable"
+
+  : > "$log"; printf '%s\n' "$subhome" > "$current"; status=0
+  out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_HOST_ROOT="$host" FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_STOP=1 \
+    FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
+    FM_ENDPOINT_TARGET=test-session:fm-mate-abort FM_LAUNCH_FILE="$TMP/mate-abort.launch" \
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$subhome" FM_HOST_PATH="$host" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" mate-abort "$subhome" codex --secondmate 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "injected secondmate stop failure unexpectedly succeeded"
+  meta="$home/state/mate-abort.meta"
+  assert_grep '^mode=secondmate$' "$meta" "failed secondmate rollback lost its fixed delivery mode"
+  assert_grep '^yolo=off$' "$meta" "failed secondmate rollback lost its fixed approval posture"
+  rm -rf "/tmp/fm-mate-abort"
+  rm -f "$meta" "$current.endpoint"
   pass "host spawn rejects old briefs, clears inherited secondmate roots, and preserves unset launches"
 }
 
@@ -1353,6 +1442,7 @@ test_decision_actions_use_durable_host_owner
 test_host_teardown_requires_confirmed_stop
 test_host_teardown_refuses_recorded_overlap_before_mutation
 test_secondmate_force_teardown_preserves_host_children_during_recursive_cleanup
+test_secondmate_force_teardown_closes_host_root_herdr_child
 test_secondmate_force_teardown_refuses_recursive_host_overlap_before_mutation
 test_task_actions_use_recorded_host_root
 test_spawn_rejects_old_brief_and_secondmate_clears_roots

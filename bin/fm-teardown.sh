@@ -1303,6 +1303,7 @@ teardown_herdr_require_prerequisites() {  # <task-id>
     fm_backend_herdr_workspace_presence_state \
     fm_backend_herdr_endpoint_confirmed_gone \
     fm_backend_herdr_explicit_close_pane_confirmed \
+    fm_backend_herdr_kill_serialized \
     fm_backend_herdr_presentation_session_lock_path; do
     if ! declare -F "$prerequisite" >/dev/null 2>&1; then
       echo "error: herdr teardown prerequisites are unavailable for $task_id; nothing was changed - restore the adapter and rerun teardown" >&2
@@ -1439,24 +1440,23 @@ cleanup_firstmate_home_children() {
        && { [ -e "$sub_state/$child_id.herdr-presentation" ] || [ -L "$sub_state/$child_id.herdr-presentation" ]; }; then
       echo "error: herdr presentation state for child $child_id requires direct child teardown; refusing destructive cleanup" >&2
       return 1
+    elif [ "$child_backend" = herdr ]; then
+      fm_backend_herdr_parse_target "$child_t" || return 1
+      if ! teardown_herdr_session_lock_held "$FM_BACKEND_HERDR_SESSION"; then
+        echo "error: herdr session presentation lock is not held for child $child_id; retaining that child's durable identity records and stopping forced cleanup" >&2
+        return 1
+      fi
+      fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true
+      if ! fm_backend_herdr_endpoint_confirmed_gone "$child_t"; then
+        echo "error: herdr pane $child_t for child $child_id is not confirmed gone; retaining that child's durable identity records and stopping forced cleanup" >&2
+        return 1
+      fi
     elif [ "$child_host_mode" -eq 1 ]; then
       ( unset FM_ROOT_OVERRIDE FM_CONFIG_OVERRIDE; FM_HOME=$home FM_ROOT=$home \
         fm_backend_stop_and_verify "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 1 \
           "$(meta_value "$child_meta" tmux_window_marker)" "$(meta_value "$child_meta" tmux_socket_path)" ) || return 1
     elif [ -n "$child_t" ]; then
       case "$child_backend" in
-        herdr)
-          fm_backend_herdr_parse_target "$child_t" || return 1
-          if ! teardown_herdr_session_lock_held "$FM_BACKEND_HERDR_SESSION"; then
-            echo "error: herdr session presentation lock is not held for child $child_id; retaining that child's durable identity records and stopping forced cleanup" >&2
-            return 1
-          fi
-          fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true
-          if ! fm_backend_herdr_endpoint_confirmed_gone "$child_t"; then
-            echo "error: herdr pane $child_t for child $child_id is not confirmed gone; retaining that child's durable identity records and stopping forced cleanup" >&2
-            return 1
-          fi
-          ;;
         zellij)
           # Zellij titles are scoped by the owning home tag, so forced secondmate
           # cleanup must verify child tabs as that child home, not the parent.
