@@ -842,7 +842,8 @@ remove_spawn_artifacts() {
     "$STATE/$ID.muse-session" "$STATE/$ID.muse-session-current" \
     "$STATE/$ID.cursor-session" "$STATE/$ID.control-relaunch" \
     "$STATE/$ID.control-relaunch.meta-prior" "$STATE/$ID.control-relaunch.brief-prior" \
-    "$STATE/$ID.control-relaunch.note"
+    "$STATE/$ID.control-relaunch.note" \
+    "$STATE/$ID.busy" "$STATE/$ID.busy-state" "$STATE/$ID.busy-gen"
   [ -z "${TASK_TMP:-}" ] || rm -rf -- "$TASK_TMP"
 }
 
@@ -2637,12 +2638,12 @@ if [ "$KIND" != secondmate ]; then
       # a turn; Stop (normal completion), StopFailure (API-error turn end),
       # and SessionEnd (process shutdown) all close it, so an abnormal end can
       # never leave a stale busy record. Claude fires no hook for a manual
-      # interrupt: fm-control preserves the adapter-owned state, while the
-      # legacy fm-send --key Escape path records idle/fm-interrupt. Stop keeps
-      # the turn-ended NOTIFICATION touch for the watcher. Every
-      # hook command tolerates a refused event (|| true) so a stale-gen writer
-      # can never break Claude's own lifecycle.
-      mkdir -p "$WT/.claude"
+      # interrupt, so the firstmate-controlled interruption procedure
+      # (harness-adapters, including fm-control and legacy fm-send --key Escape)
+      # records idle/fm-interrupt itself. Stop keeps the turn-ended NOTIFICATION
+      # touch for the watcher. Every hook command
+      # tolerates a refused event (|| true) so a stale-gen writer can never
+      # break Claude's own lifecycle.
       busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
       busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source claude-hook"
       j_submit=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event user-prompt-submit 2>/dev/null || true")
@@ -3034,8 +3035,11 @@ sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 sq_claude_settings=$(shell_quote "$STATE/$ID.claude-settings.json")
-codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify(["bash", "-c", "touch -- " + process.argv[1]]))' "$sq_turnend")
-sq_codex_notify=$(shell_quote "$codex_notify")
+sq_codex_notify=
+if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
+  codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify(["bash", "-c", "touch -- " + process.argv[1]]))' "$sq_turnend")
+  sq_codex_notify=$(shell_quote "$codex_notify")
+fi
 sq_opencode_config=
 if [ "$HOST_MODE" -eq 1 ] && [ "$HARNESS" = opencode ]; then
   opencode_plugin_url=$(node -e 'process.stdout.write(require("node:url").pathToFileURL(process.argv[1]).href)' \

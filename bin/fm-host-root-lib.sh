@@ -101,13 +101,9 @@ fm_host_root_assert_task_cwd() {
   kind_count=$(grep -c '^kind=' "$meta" 2>/dev/null || true)
   [ "$kind_count" -ne 1 ] || kind=$(sed -n 's/^kind=//p' "$meta" 2>/dev/null)
   if [ -z "$recorded" ]; then
-    if [ "$kind" = secondmate ]; then
+    if [ "$kind" = secondmate ] || fm_host_root_enabled; then
       fm_host_root_assert_session_cwd "$fm_root"
       return $?
-    fi
-    if fm_host_root_enabled; then
-      echo "error: task metadata $meta has no recorded host_root; refusing ambient host-root authority" >&2
-      return 2
     fi
     return 0
   fi

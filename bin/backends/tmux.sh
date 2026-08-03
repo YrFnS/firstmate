@@ -233,29 +233,6 @@ fm_backend_tmux_target_state() {  # <target> [task-marker] -> present|absent|unk
   fi
 }
 
-# Tri-state endpoint probe for destructive cleanup. Enumerate exact handles:
-# `display-message -t` silently falls back to the active window when a named
-# target disappeared, which would report a killed worker as still present.
-# A readable inventory proves presence/absence; control-plane failures stay unknown.
-fm_backend_tmux_target_state() {  # <target> -> present|absent|unknown
-  local target=$1 out status pane_id window_id named indexed
-  out=$(tmux list-panes -a -F '#{pane_id}|#{window_id}|#{session_name}:#{window_name}|#{session_name}:#{window_index}.#{pane_index}' 2>&1)
-  status=$?
-  if [ "$status" -eq 0 ]; then
-    while IFS='|' read -r pane_id window_id named indexed; do
-      case "$target" in
-        "$pane_id"|"$window_id"|"$named"|"$indexed") printf 'present'; return 0 ;;
-      esac
-    done <<< "$out"
-    printf 'absent'
-  else
-    case "$out" in
-      *'no server running'*|*'no sessions'*) printf 'absent' ;;
-      *) printf 'unknown' ;;
-    esac
-  fi
-}
-
 # fm_backend_tmux_kill: remove one explicitly named task window, best-effort.
 # Empty, omitted, and malformed targets return nonzero before invoking tmux so
 # tmux can never interpret an empty target as the caller's current window.
