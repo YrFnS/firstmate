@@ -800,11 +800,16 @@ test_secondmate_actions_keep_supervisor_host_authority() {
   assert_contains "$out" 'requires the supervisor cwd' "secondmate cwd mismatch did not preserve primary host authority"
 
   status=0
-  out=$(cd "$host" && FM_HOST_ROOT="$host" bash -c '. "$1"; fm_host_root_assert_task_cwd "$2" "$3"' _ "$LIB" "$ROOT" "$ordinary" 2>&1) \
+  (cd "$host" && FM_HOST_ROOT="$host" bash -c '. "$1"; fm_host_root_assert_task_cwd "$2" "$3"' _ "$LIB" "$ROOT" "$ordinary") \
     || status=$?
-  expect_code 2 "$status" "ordinary task without host_root metadata must remain rejected"
-  assert_contains "$out" 'has no recorded host_root' "secondmate exception weakened ordinary task ownership"
-  pass "secondmate actions retain primary host cwd authority without inheriting host_root metadata"
+  expect_code 0 "$status" "legacy task should remain operable from the enabled supervisor host cwd"
+
+  status=0
+  out=$(cd "$other" && FM_HOST_ROOT="$host" bash -c '. "$1"; fm_host_root_assert_task_cwd "$2" "$3"' _ "$LIB" "$ROOT" "$ordinary" 2>&1) \
+    || status=$?
+  expect_code 2 "$status" "legacy task must still reject a supervisor host cwd mismatch"
+  assert_contains "$out" 'requires the supervisor cwd' "legacy task cwd mismatch did not preserve primary host authority"
+  pass "legacy and secondmate actions retain primary host cwd authority without host_root metadata"
 }
 
 test_spawn_rollback_is_transactional() {
@@ -820,6 +825,8 @@ test_spawn_rollback_is_transactional() {
       "$ROOT/bin/fm-brief.sh" "$id" target >/dev/null 2>&1)
   done
   fb=$(make_fakebin "$TMP/fake-rollback")
+  printf '#!/usr/bin/env bash\nexit 99\n' > "$fb/node"
+  chmod +x "$fb/node"
   log="$TMP/rollback.log"; current="$TMP/rollback.current"; tree_log="$TMP/rollback-treehouse.log"
 
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
@@ -839,6 +846,7 @@ test_spawn_rollback_is_transactional() {
   rm -f "$home/state/rollback-marker.meta" "$current.endpoint"
 
   printf '%s\n' "$project" > "$current"
+  touch "$home/state/rollback-clean.busy"
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_FAIL_LAUNCH_SEND=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-rollback-clean FM_LAUNCH_FILE="$TMP/rollback.launch" \
@@ -848,6 +856,9 @@ test_spawn_rollback_is_transactional() {
   assert_grep 'return --force' "$tree_log" "successful rollback did not return the isolated copy"
   assert_absent "$home/state/rollback-clean.meta" "successful rollback left metadata"
   assert_absent "$home/state/rollback-clean.pi-ext.ts" "successful rollback left its pre-record Pi artifact"
+  assert_absent "$home/state/rollback-clean.busy" "successful rollback left legacy busy state"
+  assert_absent "$home/state/rollback-clean.busy-state" "successful rollback left semantic busy state"
+  assert_absent "$home/state/rollback-clean.busy-gen" "successful rollback left semantic busy generation"
   assert_absent "/tmp/fm-rollback-clean" "successful rollback left its task temp root"
 
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
