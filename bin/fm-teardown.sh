@@ -56,7 +56,8 @@
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force]
 #   Host-root task actions bind to the physical host_root= recorded in task
-#   metadata before supervision repair, task-data reads, or cleanup mutation.
+#   metadata before supervision repair, task-data reads, or cleanup mutation;
+#   legacy metadata without host_root= binds to the validated ambient host cwd.
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
