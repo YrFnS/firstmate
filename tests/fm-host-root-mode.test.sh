@@ -456,7 +456,9 @@ assert args.count("-c") == 1, args
 i = args.index("-c")
 config = args[i + 1]
 notify = tomllib.loads(config)["notify"]
-assert notify[:2] == ["bash", "-c"], notify
+assert pathlib.Path(notify[0]).is_absolute(), notify
+assert pathlib.Path(notify[0]).name.lower() in {"bash", "bash.exe"}, notify
+assert notify[1] == "-c", notify
 subprocess.run(notify, check=True)
 PY
   assert_present "$turnend" "Codex notify command did not touch the exact hostile path"
@@ -642,7 +644,10 @@ test_all_harnesses_add_one_task_safeguard() {
         count=$(printf '%s' "$text" | grep -oF 'opencode-turn-end.js' | wc -l | tr -d ' ')
         [ "$count" -eq 1 ] || fail "OpenCode task plugin appeared $count times"
         assert_present "$home/state/$id.opencode-turn-end.js" "OpenCode task plugin missing"
-        assert_contains "$text" '%23%25%3F' "OpenCode task plugin file URL did not encode path metacharacters"
+        case $(uname -s) in
+          MINGW*|MSYS*) assert_contains "$text" '%23%25%EF%80%BF' "OpenCode task plugin file URL did not encode MSYS path metacharacters" ;;
+          *) assert_contains "$text" '%23%25%3F' "OpenCode task plugin file URL did not encode path metacharacters" ;;
+        esac
         node --check "$home/state/$id.opencode-turn-end.js" >/dev/null \
           || fail "OpenCode task plugin is invalid JavaScript"
         ;;
@@ -893,8 +898,8 @@ test_spawn_rollback_is_transactional() {
     FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-scout "$project" pi --scout 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected scout stop failure unexpectedly succeeded"
   assert_present "$home/state/rollback-scout.meta" "failed scout rollback lost recovery metadata"
-  assert_no_grep '^mode=' "$home/state/rollback-scout.meta" "failed scout rollback fabricated a delivery mode"
-  assert_no_grep '^yolo=' "$home/state/rollback-scout.meta" "failed scout rollback fabricated delivery authority"
+  assert_no_grep 'mode=' "$home/state/rollback-scout.meta" "failed scout rollback fabricated a delivery mode"
+  assert_no_grep 'yolo=' "$home/state/rollback-scout.meta" "failed scout rollback fabricated delivery authority"
   rm -rf "/tmp/fm-rollback-scout"
   rm -f "$home/state/rollback-scout.meta" "$home/state/rollback-scout.pi-ext.ts" "$current.endpoint"
 
@@ -1376,7 +1381,7 @@ test_task_actions_use_recorded_host_root() {
 }
 
 test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
-  local host="$TMP/reject-host" home="$TMP/reject-home" project="$TMP/reject-target" subhome="$TMP/secondmate-home" fb log current launch meta out status=0
+  local host="$TMP/reject-host" home="$TMP/reject-home" project="$TMP/reject-target" subhome="$TMP/secondmate-home" unsethome="$TMP/secondmate-unset-home" aborthome="$TMP/secondmate-abort-home" fb log current launch meta out status=0
   make_host "$host"; mkdir -p "$home/data/old" "$home/state" "$home/config"; printf 'old brief\n' > "$home/data/old/brief.md"; fm_git_init_commit "$project"
   out=$(cd "$host" && FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-spawn.sh" old "$project" codex --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "host spawn accepted a cwd-relative old brief"
@@ -1386,6 +1391,13 @@ test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
   printf '# Secondmate\n' > "$subhome/AGENTS.md"
   printf 'mate\n' > "$subhome/.fm-secondmate-home"
   printf 'charter\n' > "$subhome/data/charter.md"
+  mkdir -p "$unsethome/bin" "$unsethome/data" "$aborthome/bin" "$aborthome/data"
+  printf '# Secondmate\n' > "$unsethome/AGENTS.md"
+  printf 'mate-unset\n' > "$unsethome/.fm-secondmate-home"
+  printf 'charter\n' > "$unsethome/data/charter.md"
+  printf '# Secondmate\n' > "$aborthome/AGENTS.md"
+  printf 'mate-abort\n' > "$aborthome/.fm-secondmate-home"
+  printf 'charter\n' > "$aborthome/data/charter.md"
   fb=$(make_fakebin "$TMP/fake-secondmate")
   log="$TMP/secondmate.log"; current="$TMP/secondmate.current"; launch="$TMP/secondmate.launch"
   printf '%s\n' "$subhome" > "$current"
@@ -1395,28 +1407,30 @@ test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
     "$ROOT/bin/fm-spawn.sh" mate "$subhome" codex --secondmate >/dev/null 2>&1)
   assert_contains "$(cat "$launch")" 'FM_HOST_ROOT= FM_TARGET_WORKTREE=' "secondmate launch did not clear both host variables"
   meta="$home/state/mate.meta"
-  assert_no_grep '^host_root=' "$meta" "secondmate metadata inherited host_root"
+  assert_no_grep 'host_root=' "$meta" "secondmate metadata inherited host_root"
   assert_grep "worktree=$subhome" "$meta" "secondmate lost its isolated-home worktree"
 
-  : > "$launch"; printf '%s\n' "$subhome" > "$current"
+  current="$TMP/secondmate-unset.current"
+  : > "$launch"; printf '%s\n' "$unsethome" > "$current"
   (cd "$host" && env -u FM_HOST_ROOT -u FM_TARGET_WORKTREE PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" \
-    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$subhome" FM_HOST_PATH="$host" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" mate-unset "$subhome" codex --secondmate >/dev/null 2>&1)
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$unsethome" FM_HOST_PATH="$host" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" mate-unset "$unsethome" codex --secondmate >/dev/null 2>&1)
   assert_not_contains "$(cat "$launch")" 'FM_HOST_ROOT=' "unset-mode secondmate launch changed its historical environment prefix"
   assert_not_contains "$(cat "$launch")" 'FM_TARGET_WORKTREE=' "unset-mode secondmate launch set a new empty target variable"
 
-  : > "$log"; printf '%s\n' "$subhome" > "$current"; status=0
+  current="$TMP/secondmate-abort.current"
+  : > "$log"; printf '%s\n' "$aborthome" > "$current"; status=0
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_HOST_ROOT="$host" FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_STOP=1 \
     FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-mate-abort FM_LAUNCH_FILE="$TMP/mate-abort.launch" \
-    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$subhome" FM_HOST_PATH="$host" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" mate-abort "$subhome" codex --secondmate 2>&1) || status=$?
+    FM_CURRENT_PATH="$current" FM_TARGET_PATH="$aborthome" FM_HOST_PATH="$host" TMUX=fake \
+    "$ROOT/bin/fm-spawn.sh" mate-abort "$aborthome" codex --secondmate 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected secondmate stop failure unexpectedly succeeded"
   meta="$home/state/mate-abort.meta"
-  assert_grep '^mode=secondmate$' "$meta" "failed secondmate rollback lost its fixed delivery mode"
-  assert_grep '^yolo=off$' "$meta" "failed secondmate rollback lost its fixed approval posture"
+  assert_grep 'mode=secondmate' "$meta" "failed secondmate rollback lost its fixed delivery mode"
+  assert_grep 'yolo=off' "$meta" "failed secondmate rollback lost its fixed approval posture"
   rm -rf "/tmp/fm-mate-abort"
   rm -f "$meta" "$current.endpoint"
   pass "host spawn rejects old briefs, clears inherited secondmate roots, and preserves unset launches"

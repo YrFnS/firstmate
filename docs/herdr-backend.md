@@ -35,8 +35,8 @@ Real harness credential tests remain opt-in rather than part of default CI.
 
 Herdr is the verified native-Windows runtime backend.
 Run Firstmate commands from GNU Bash with `cygpath` available so drive-absolute Herdr paths can be normalized for shell helpers.
-On Windows, Herdr can omit `foreground_cwd` and keep its top-level `cwd` bound to PowerShell while Treehouse enters a Bash subshell.
-The adapter therefore reads the live nested cwd through a marked pane probe before worker launch instead of trusting that frozen top-level path.
+On Windows, Herdr can omit `foreground_cwd` and keep its top-level `cwd` bound to PowerShell while Treehouse enters a `cmd.exe` subshell.
+The adapter therefore probes the live nested cwd before starting FirstMate's POSIX launch contract through Git Bash instead of typing that contract into `cmd.exe`.
 [`verification/runtime-backends.md`](verification/runtime-backends.md#host-root-task-routing) owns the dated native-Windows runtime evidence.
 
 ## Watching and task containers

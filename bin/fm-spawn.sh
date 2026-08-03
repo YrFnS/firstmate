@@ -475,7 +475,7 @@ remove_spawn_artifacts() {
   fi
   rm -f -- "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
     "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token" \
-    "$STATE/$ID.claude-settings.json" "$STATE/$ID.opencode-turn-end.js" \
+    "$STATE/$ID.claude-settings.json" "$STATE/$ID.opencode-turn-end.js" "$STATE/$ID.herdr-launch.sh" \
     "$STATE/$ID.busy" "$STATE/$ID.busy-state" "$STATE/$ID.busy-gen"
   [ -z "${TASK_TMP:-}" ] || rm -rf -- "$TASK_TMP"
 }
@@ -1202,7 +1202,7 @@ validate_spawn_worktree() {  # <source> <inspect-target>
 }
 
 arm_created_endpoint_rollback() {
-  [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] || return 0
+  { [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ]; } || return 0
   [ "${FM_BACKEND_CREATE_OCCURRED:-0}" = 1 ] || return 0
   SPAWN_ENDPOINT_CREATED=1
   case "$BACKEND" in
@@ -1562,7 +1562,7 @@ esac
 # endpoint. Adapter create functions expose partial post-create state so a
 # verification failure cannot leave an unrecorded live endpoint; a duplicate
 # preflight failure leaves FM_BACKEND_CREATE_OCCURRED=0 and owns nothing.
-if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if { [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ]; } && [ "$BACKEND" != orca ]; then
   SPAWN_ENDPOINT_CREATED=1
   SPAWN_ABORT_CLEANUP=1
 fi
@@ -2051,7 +2051,11 @@ sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_claude_settings=$(shell_quote "$STATE/$ID.claude-settings.json")
 sq_codex_notify=
 if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
-  codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify(["bash", "-c", "touch -- " + process.argv[1]]))' "$sq_turnend")
+  codex_notify_bash=$(type -P bash) || { echo "error: codex turn-end notification requires bash" >&2; exit 1; }
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*) codex_notify_bash=$(cygpath -w "$codex_notify_bash") ;;
+  esac
+  codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify([process.argv[1], "-c", "touch -- " + process.argv[2]]))' "$codex_notify_bash" "$sq_turnend")
   sq_codex_notify=$(shell_quote "$codex_notify")
 fi
 sq_opencode_config=
@@ -2098,11 +2102,33 @@ if [ "$KIND" = secondmate ]; then
 elif [ "$HOST_MODE" -eq 1 ]; then
   LAUNCH="PATH=$(shell_quote "$PATH") FM_ROOT_OVERRIDE=$(shell_quote "$FM_ROOT") FM_HOME=$(shell_quote "$FM_HOME") FM_HOST_ROOT=$(shell_quote "$HOST_ROOT") FM_TARGET_WORKTREE=$(shell_quote "$WT") $LAUNCH"
 fi
-# Export GOTMPDIR into the crewmate's pane shell so the agent and every child
-# process (go build, go test, ...) inherit it. Sent before the launch command so
-# the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
-sleep 0.3
+# Native Windows Treehouse enters cmd.exe, so run the POSIX launch contract in
+# Git Bash instead of typing env assignments into cmd. The one-shot script
+# deletes itself before launch and carries GOTMPDIR into the agent process.
+HERDR_WINDOWS_LAUNCH=
+if [ "$BACKEND" = herdr ]; then
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*)
+      HERDR_WINDOWS_LAUNCH="$STATE/$ID.herdr-launch.sh"
+      {
+        printf '#!/usr/bin/env bash\n'
+        printf 'rm -f -- "$0"\n'
+        printf 'export GOTMPDIR=%s\n' "$(shell_quote "$TASK_TMP/gotmp")"
+        printf '%s\n' "$LAUNCH"
+      } > "$HERDR_WINDOWS_LAUNCH"
+      chmod 600 "$HERDR_WINDOWS_LAUNCH"
+      herdr_windows_bash=$(type -P bash) || { echo "error: native Windows Herdr launch requires bash" >&2; exit 1; }
+      LAUNCH="\"$(cygpath -w "$herdr_windows_bash")\" \"$(cygpath -w "$HERDR_WINDOWS_LAUNCH")\""
+      ;;
+  esac
+fi
+if [ -z "$HERDR_WINDOWS_LAUNCH" ]; then
+  # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
+  # process (go build, go test, ...) inherit it. Sent before the launch command so
+  # the env is set when the agent starts; the brief sleep lets the export land.
+  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+  sleep 0.3
+fi
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
 if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
