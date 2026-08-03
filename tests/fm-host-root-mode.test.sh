@@ -153,7 +153,7 @@ SH
   chmod +x "$fake_root/bin/fm-guard.sh"
   status=0
   (cd "$other" && FM_GUARD_MUTATION="$TMP/guard-ran" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-spawn.sh" guarded "$TMP/missing-project" codex >/dev/null 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" guarded "$TMP/missing-project" codex --mode no-mistakes --yolo off >/dev/null 2>&1) || status=$?
   expect_code 2 "$status" "spawn host cwd mismatch must fail"
   assert_absent "$TMP/guard-ran" "spawn ran the supervision guard before host validation"
 
@@ -205,7 +205,7 @@ test_brief_variants() {
   local host="$TMP/brief & host" home="$TMP/brief-home" brief scout normal_home="$TMP/normal-home"
   make_host "$host"
   mkdir -p "$home/data" "$normal_home/data"
-  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane-host alpha >/dev/null 2>&1)
+  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane-host alpha --mode no-mistakes >/dev/null 2>&1)
   brief="$home/data/lane-host/brief.md"
   assert_grep '<!-- firstmate-execution-mode: host-root -->' "$brief" "host brief marker missing"
   assert_contains "$(cat "$brief")" "$host" "host brief corrupted the literal supervisor path"
@@ -229,7 +229,7 @@ test_brief_variants() {
   assert_grep 'subshell leaves your worker in the isolated target cwd' "$scout" \
     "host scout lifecycle guidance does not preserve the worker target cwd"
 
-  FM_HOME="$normal_home" "$ROOT/bin/fm-brief.sh" lane-normal 'alpha & beta' >/dev/null 2>&1
+  FM_HOME="$normal_home" "$ROOT/bin/fm-brief.sh" lane-normal 'alpha & beta' --mode no-mistakes >/dev/null 2>&1
   assert_no_grep 'firstmate-execution-mode: host-root' "$normal_home/data/lane-normal/brief.md" "default brief changed execution mode"
   assert_contains "$(cat "$normal_home/data/lane-normal/brief.md")" 'alpha & beta' "default brief corrupted the literal repository name"
   assert_grep 'git checkout -b fm/lane-normal' "$normal_home/data/lane-normal/brief.md" "default brief lost its normal branch command"
@@ -247,7 +247,7 @@ test_host_local_only_rejected_before_mutation() {
     "- $(basename "$project") [no-mistakes] - physical target (added 2026-07-26)" > "$home/data/projects.md"
 
   out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-brief.sh" local-brief "$(basename "$alias")" 2>&1) || status=$?
+    "$ROOT/bin/fm-brief.sh" local-brief "$(basename "$alias")" --mode local-only 2>&1) || status=$?
   expect_code 1 "$status" "host-root brief must reject local-only delivery"
   assert_contains "$out" "host-root mode does not support local-only project" "host-root brief refusal was not explicit"
   assert_absent "$home/data/local-brief" "host-root brief created task data before rejecting local-only delivery"
@@ -263,7 +263,7 @@ SH
   printf '<!-- firstmate-execution-mode: host-root -->\n' > "$home/data/local-spawn/brief.md"
   status=0
   out=$(cd "$host" && FM_GUARD_MUTATION="$guard_marker" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-spawn.sh" local-spawn "$alias" codex 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" local-spawn "$alias" codex --mode local-only --yolo off 2>&1) || status=$?
   expect_code 1 "$status" "host-root spawn must reject local-only delivery"
   assert_contains "$out" "host-root mode does not support local-only project" "host-root spawn refusal was not explicit"
   assert_absent "$guard_marker" "host-root spawn ran the fleet guard before rejecting local-only delivery"
@@ -415,14 +415,14 @@ test_spawn_separates_roots() {
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   fm_git_init_commit "$project"
   git -C "$project" worktree add -q --detach "$wt"
-  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane "$(basename "$project")" >/dev/null 2>&1)
+  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane "$(basename "$project")" --mode no-mistakes >/dev/null 2>&1)
   fb=$(make_fakebin "$TMP/fake")
   log="$TMP/tmux.log"; current="$TMP/current"; launch="$TMP/launch"; obs="$TMP/worker-observation"; argv="$TMP/codex.argv"
   printf '%s\n' "$project" > "$current"
   before=$(git -C "$host" status --porcelain)
   (cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" lane "$project" codex > "$TMP/spawn.out" 2>&1) \
+    "$ROOT/bin/fm-spawn.sh" lane "$project" codex --mode no-mistakes --yolo off > "$TMP/spawn.out" 2>&1) \
     || fail "host-root spawn failed: $(cat "$TMP/spawn.out")"
   meta="$home/state/lane.meta"
   assert_grep "worktree=$wt" "$meta" "spawn meta lost target worktree"
@@ -481,7 +481,7 @@ test_duplicate_spawn_preserves_existing_task() {
   fm_git_init_commit "$project"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-brief.sh" lane target >/dev/null 2>&1)
+    "$ROOT/bin/fm-brief.sh" lane target --mode no-mistakes >/dev/null 2>&1)
   printf 'window=test-session:fm-lane\nworktree=/tmp/existing-worktree\nhost_root=%s\nproject=%s\nkind=ship\n' \
     "$host" "$project" > "$home/state/lane.meta"
   printf 'working: existing task\n' > "$home/state/lane.status"
@@ -495,7 +495,7 @@ test_duplicate_spawn_preserves_existing_task() {
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_EXISTING_WINDOW=fm-lane FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" \
     FM_TARGET_PATH=/tmp/unused FM_HOST_PATH="$host" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" lane "$project" codex 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" lane "$project" codex --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "duplicate spawn unexpectedly succeeded"
   assert_contains "$out" 'task metadata already exists for lane' "duplicate spawn refusal was not explicit"
   assert_no_grep 'kill-window' "$log" "duplicate spawn killed the existing task endpoint"
@@ -508,7 +508,7 @@ test_duplicate_spawn_preserves_existing_task() {
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" \
     FM_TARGET_PATH=/tmp/unused FM_HOST_PATH="$host" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" lane "$project" codex 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" lane "$project" codex --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "retained metadata admitted a same-id spawn after its endpoint disappeared"
   assert_contains "$out" 'task metadata already exists for lane' "retained metadata refusal was not explicit"
   [ ! -s "$log" ] || fail "retained metadata retry inspected or created a backend endpoint"
@@ -552,7 +552,7 @@ SH
   chmod +x "$fb/herdr"
 
   out=$(env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
-    "$ROOT/bin/fm-spawn.sh" herdr-retry "$project" codex --backend herdr 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" herdr-retry "$project" codex --backend herdr --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "unset-mode Herdr retry bypassed its live-endpoint refusal"
   assert_contains "$out" 'existing herdr endpoint for herdr-retry is live' \
     "unset-mode retry did not reach the established Herdr identity classifier"
@@ -568,7 +568,7 @@ test_spawn_rejects_host_as_target() {
   make_host "$host"
   mkdir -p "$home/data/host-target" "$home/state" "$home/config"
   fm_git_init_commit "$project"
-  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" host-target target >/dev/null 2>&1)
+  (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" host-target target --mode no-mistakes >/dev/null 2>&1)
   fb=$(make_fakebin "$TMP/fake-refusals")
   log="$TMP/refusals.log"; current="$TMP/refusals.current"; tree_log="$TMP/treehouse.log"
 
@@ -577,7 +577,7 @@ test_spawn_rejects_host_as_target() {
     FM_TMUX_LOG="$log" FM_ENDPOINT_TARGET=test-session:fm-host-target \
     FM_LAUNCH_FILE="$TMP/refusal.launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$host" \
     FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" host-target "$project" codex 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" host-target "$project" codex --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "spawn accepted FM_HOST_ROOT as the target worktree"
   assert_contains "$out" 'overlapping host and target roots' "host-as-target refusal was not explicit"
   assert_contains "$(cat "$log")" 'kill-window' "host-as-target refusal leaked its tmux endpoint"
@@ -616,14 +616,14 @@ test_all_harnesses_add_one_task_safeguard() {
     id="adapter-$harness"
     wt="$TMP/$id-wt"
     git -C "$project" worktree add -q --detach "$wt"
-    (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" "$id" "$(basename "$project")" >/dev/null 2>&1)
+    (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" "$id" "$(basename "$project")" --mode no-mistakes >/dev/null 2>&1)
     fb=$(make_fakebin "$TMP/fake-$harness")
     log="$TMP/$id.log"; current="$TMP/$id.current"; launch="$TMP/$id.launch"
     printf '%s\n' "$project" > "$current"
     (cd "$host" && HOME="$TMP/harness-home" PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
       FM_FAKE_KIMI=1 FM_KIMI_READY_POLLS=1 FM_KIMI_DELIVERY_POLLS=1 FM_KIMI_POLL_INTERVAL=0 \
       FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$launch" FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" TMUX=fake \
-      "$ROOT/bin/fm-spawn.sh" "$id" "$project" "$harness" >/dev/null)
+      "$ROOT/bin/fm-spawn.sh" "$id" "$project" "$harness" --mode no-mistakes --yolo off >/dev/null)
     text=$(cat "$launch")
     bash -n -c "$text" || fail "$harness host-root launch is not valid shell"
     case "$harness" in
@@ -668,9 +668,9 @@ test_all_harnesses_add_one_task_safeguard() {
 
   id=adapter-raw
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-brief.sh" "$id" "$(basename "$project")" >/dev/null 2>&1)
+    "$ROOT/bin/fm-brief.sh" "$id" "$(basename "$project")" --mode no-mistakes >/dev/null 2>&1)
   out=$(cd "$host" && FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$project" 'claude --dangerously-skip-permissions' 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" "$id" "$project" 'claude --dangerously-skip-permissions' --mode no-mistakes --yolo off 2>&1) || status=$?
   expect_code 2 "$status" "host mode must reject a raw launch command without a verified task safeguard"
   assert_contains "$out" 'requires a named verified harness' "raw host launch refusal was not explicit"
   assert_absent "$home/state/$id.meta" "raw host launch mutated task state before refusal"
@@ -733,7 +733,7 @@ test_mutators_require_host_cwd() {
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-review-diff.sh" lane --stat 2>&1) || status=$?
   expect_code 2 "$status" "fm-review-diff must reject a host cwd mismatch"
   status=0
-  out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
+  out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout --mode no-mistakes --yolo off 2>&1) || status=$?
   expect_code 2 "$status" "fm-promote must reject a host cwd mismatch"
   grep -qx 'kind=scout' "$home/state/scout.meta" || fail "promote mutated task metadata before host validation"
   printf 'mode=local-only\n' >> "$home/state/scout.meta"
@@ -743,14 +743,14 @@ test_mutators_require_host_cwd() {
 SH
   chmod +x "$fake_root/bin/fm-guard.sh"
   status=0
-  out=$(cd "$host" && FM_GUARD_MUTATION="$guard_marker" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
+  out=$(cd "$host" && FM_GUARD_MUTATION="$guard_marker" FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout --mode local-only --yolo off 2>&1) || status=$?
   expect_code 1 "$status" "fm-promote must reject a host-root local-only scout"
   assert_contains "$out" 'host-root mode does not support promoting local-only scout' "host-root local-only promotion refusal was not explicit"
   assert_absent "$guard_marker" "host-root promotion ran the fleet guard before rejecting local-only delivery"
   grep -qx 'kind=scout' "$home/state/scout.meta" || fail "local-only promotion mutated task metadata"
   sed -i '/^mode=local-only$/d' "$home/state/scout.meta"
   status=0
-  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout 2>&1) || status=$?
+  out=$(cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-promote.sh" scout --mode no-mistakes --yolo off 2>&1) || status=$?
   expect_code 0 "$status" "fm-promote rejected a recorded host-root scout"
   assert_contains "$out" "'$ROOT/bin/fm-send.sh'" "host-root promotion did not print a quoted absolute fm-send path"
   # shellcheck disable=SC2016  # Assertions intentionally match literal worker variables.
@@ -763,9 +763,9 @@ SH
   assert_contains "$out" '(cd "$FM_TARGET_WORKTREE" && ...)' "host-root promotion did not scope validation commands"
   printf 'window=fake:fm-plain\nworktree=/tmp/plain\nproject=/tmp/project\nkind=scout\n' > "$home/state/plain.meta"
   status=0
-  out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$ROOT/bin/fm-promote.sh" plain 2>&1) || status=$?
+  out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" "$ROOT/bin/fm-promote.sh" plain --mode no-mistakes --yolo off 2>&1) || status=$?
   expect_code 0 "$status" "fm-promote changed default-mode promotion"
-  assert_contains "$out" '<ship instructions: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/plain; implement; report done>' "default-mode promotion instructions changed"
+  assert_contains "$out" '<ship instructions for mode=no-mistakes: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/plain; implement; report done>' "default-mode promotion instructions changed"
   status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-check-register.sh" lane 2>&1) || status=$?
   expect_code 2 "$status" "fm-check-register must reject a host cwd mismatch"
@@ -822,7 +822,7 @@ test_spawn_rollback_is_transactional() {
   git -C "$project" worktree add -q --detach "$unset_wt"
   for id in rollback-marker rollback-clean rollback-stuck rollback-uncertain rollback-retained; do
     (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
-      "$ROOT/bin/fm-brief.sh" "$id" target >/dev/null 2>&1)
+      "$ROOT/bin/fm-brief.sh" "$id" target --mode no-mistakes >/dev/null 2>&1)
   done
   fb=$(make_fakebin "$TMP/fake-rollback")
   printf '#!/usr/bin/env bash\nexit 99\n' > "$fb/node"
@@ -834,7 +834,7 @@ test_spawn_rollback_is_transactional() {
     FM_FAIL_MARKER_SET=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-rollback-marker FM_LAUNCH_FILE="$TMP/rollback-marker.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" rollback-marker "$project" pi 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" rollback-marker "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected tmux marker failure unexpectedly succeeded"
   assert_no_grep 'kill-window' "$log" "marker failure bypassed ownership verification during rollback"
   assert_no_grep 'return --force' "$tree_log" "marker failure recycled a worktree before endpoint absence was confirmed"
@@ -851,7 +851,7 @@ test_spawn_rollback_is_transactional() {
     FM_FAIL_LAUNCH_SEND=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-rollback-clean FM_LAUNCH_FILE="$TMP/rollback.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" rollback-clean "$project" pi 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" rollback-clean "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected launch failure unexpectedly succeeded"
   assert_grep 'return --force' "$tree_log" "successful rollback did not return the isolated copy"
   assert_absent "$home/state/rollback-clean.meta" "successful rollback left metadata"
@@ -866,7 +866,7 @@ test_spawn_rollback_is_transactional() {
     FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_STOP=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-rollback-stuck FM_LAUNCH_FILE="$TMP/rollback-stuck.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$stuck_wt" FM_HOST_PATH="$host" \
-    FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-stuck "$project" pi 2>&1) || status=$?
+    FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-stuck "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected stop failure unexpectedly succeeded"
   assert_contains "$out" 'still exists after stop' "failed endpoint termination was not explicit (backend log: $(tr '\n' ';' < "$log"))"
   assert_no_grep 'return --force' "$tree_log" "rollback reused the isolated copy after unconfirmed termination"
@@ -886,7 +886,7 @@ test_spawn_rollback_is_transactional() {
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_FAIL_LAUNCH_ENTER=1 FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-uncertain.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$uncertain_wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" rollback-uncertain "$project" pi 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" rollback-uncertain "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "ambiguous Enter failure unexpectedly succeeded"
   assert_contains "$out" 'launch submission could not be confirmed' "ambiguous Enter failure did not explain the retained task"
   assert_no_grep 'kill-window' "$log" "ambiguous Enter failure killed a possibly running worker"
@@ -902,7 +902,7 @@ test_spawn_rollback_is_transactional() {
     FM_FAIL_LAUNCH_SEND=1 FM_REFUSE_RETURN=1 FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 FM_TMUX_LOG="$log" \
     FM_ENDPOINT_TARGET=test-session:fm-rollback-retained FM_LAUNCH_FILE="$TMP/rollback-retained.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$retained_wt" FM_HOST_PATH="$host" \
-    FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
+    FM_TREEHOUSE_LOG="$tree_log" TMUX=fake "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "injected worktree return failure unexpectedly succeeded"
   assert_present "$home/state/rollback-retained.meta" "worktree return failure lost recovery metadata"
   assert_absent "$current.endpoint" "worktree return failure left the stopped endpoint alive"
@@ -911,7 +911,7 @@ test_spawn_rollback_is_transactional() {
   out=$(cd "$host" && PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-retained-retry.launch" FM_CURRENT_PATH="$current" \
     FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "same-id retry overwrote retained cleanup metadata"
   assert_contains "$out" 'task metadata already exists for rollback-retained' "retained cleanup retry refusal was not explicit"
   [ ! -s "$log" ] || fail "retained cleanup retry inspected or created an endpoint"
@@ -922,7 +922,7 @@ test_spawn_rollback_is_transactional() {
   out=$(cd "$host" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-retained-unset-retry.launch" FM_CURRENT_PATH="$current" \
     FM_TARGET_PATH="$wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" rollback-retained "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "unset retry overwrote retained host cleanup metadata"
   assert_contains "$out" 'task metadata already exists for rollback-retained' "unset retained-host retry refusal was not explicit"
   [ ! -s "$log" ] || fail "unset retained-host retry inspected or created an endpoint"
@@ -932,12 +932,12 @@ test_spawn_rollback_is_transactional() {
   rm -f "$home/state/rollback-retained.meta" "$home/state/rollback-retained.pi-ext.ts"
 
   env -u FM_HOST_ROOT FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
-    "$ROOT/bin/fm-brief.sh" rollback-unset target >/dev/null 2>&1
+    "$ROOT/bin/fm-brief.sh" rollback-unset target --mode no-mistakes >/dev/null 2>&1
   : > "$log"; : > "$tree_log"; printf '%s\n' "$project" > "$current"; status=0
   out=$(cd "$host" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_FAIL_LAUNCH_SEND=1 FM_TMUX_LOG="$log" FM_LAUNCH_FILE="$TMP/rollback-unset.launch" \
     FM_CURRENT_PATH="$current" FM_TARGET_PATH="$unset_wt" FM_HOST_PATH="$host" FM_TREEHOUSE_LOG="$tree_log" TMUX=fake \
-    "$ROOT/bin/fm-spawn.sh" rollback-unset "$project" pi 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" rollback-unset "$project" pi --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "unset-mode injected launch failure unexpectedly succeeded"
   assert_no_grep 'kill-window' "$log" "unset-mode launch failure changed upstream endpoint cleanup"
   assert_no_grep 'return --force' "$tree_log" "unset-mode launch failure changed upstream worktree cleanup"
@@ -1303,7 +1303,7 @@ test_task_actions_use_recorded_host_root() {
 test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
   local host="$TMP/reject-host" home="$TMP/reject-home" project="$TMP/reject-target" subhome="$TMP/secondmate-home" fb log current launch meta out status=0
   make_host "$host"; mkdir -p "$home/data/old" "$home/state" "$home/config"; printf 'old brief\n' > "$home/data/old/brief.md"; fm_git_init_commit "$project"
-  out=$(cd "$host" && FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-spawn.sh" old "$project" codex 2>&1) || status=$?
+  out=$(cd "$host" && FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-spawn.sh" old "$project" codex --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "host spawn accepted a cwd-relative old brief"
   assert_contains "$out" 'requires a host-root brief' "old-brief rejection was not explicit"
 

@@ -540,7 +540,7 @@ test_spawn_preserves_pathless_orca_worktree_when_terminal_stop_is_unknown() {
     FM_BACKEND_STOP_ATTEMPTS=1 FM_BACKEND_STOP_DELAY=0 \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend orca 2>&1 )
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when path parsing fails"
   log_text=$(cat "$LOG")
@@ -653,7 +653,7 @@ test_host_root_spawn_refuses_wrong_orca_terminal_cwd() {
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$TMP_ROOT/cwd-home" FM_HOST_ROOT="$host" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend orca 2>&1) || status=$?
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "host-root Orca spawn accepted a terminal outside the target worktree"
   assert_contains "$out" "did not enter FM_TARGET_WORKTREE $wt" \
     "wrong Orca terminal cwd refusal did not explain the target requirement"

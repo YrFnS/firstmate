@@ -79,7 +79,7 @@ SH
 chmod +x "$FAKEBIN/codex"
 
 (cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST" \
-  "$ROOT/bin/fm-brief.sh" "$ID" "$(basename "$PROJECT")" >/dev/null) \
+  "$ROOT/bin/fm-brief.sh" "$ID" "$(basename "$PROJECT")" --scout >/dev/null) \
   || fail "could not create host-root brief"
 
 SPAWN_OUT="$TMP_ROOT/spawn.out"
