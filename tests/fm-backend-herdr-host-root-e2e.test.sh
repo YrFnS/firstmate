@@ -7,6 +7,12 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-host-root-e2e.XXXXXX")
 SESSION="fm-lab-host-root-e2e-$$"
 ID=host-root-e2e
 WT=
+EVIDENCE_FILE=
+
+if [ -n "${FM_TEST_EVIDENCE_DIR:-}" ]; then
+  mkdir -p "$FM_TEST_EVIDENCE_DIR"
+  EVIDENCE_FILE="$FM_TEST_EVIDENCE_DIR/native-herdr-host-root-e2e.txt"
+fi
 
 cleanup() {
   [ -z "$WT" ] || treehouse return --force "$WT" >/dev/null 2>&1 || true
@@ -115,6 +121,19 @@ assert_line "$META" "host_root=$HOST_REAL" "metadata did not retain host authori
 [ -z "$(git -C "$HOST" status --short)" ] || fail "worker changed the host repository"
 [ -z "$(git -C "$PROJECT" status --short)" ] || fail "worker changed the target primary checkout"
 [ -f "$WT/worker-edit.txt" ] || fail "worker edit did not stay in the target worktree"
+[ ! -e "$HOME_ROOT/state/$ID.herdr-launch.sh" ] || fail "native Windows Herdr launcher did not delete itself"
+if [ -n "$EVIDENCE_FILE" ]; then
+  {
+    printf 'Native Herdr host-root worker observation\n'
+    cat "$OBS"
+    printf 'completion=%s\n' "$(tail -n 1 "$HOME_ROOT/state/$ID.status")"
+    printf 'backend=%s\n' "$(sed -n 's/^backend=//p' "$META")"
+    printf 'host_checkout_clean=%s\n' "$(test -z "$(git -C "$HOST" status --short)" && echo yes || echo no)"
+    printf 'target_primary_clean=%s\n' "$(test -z "$(git -C "$PROJECT" status --short)" && echo yes || echo no)"
+    printf 'worker_edit_in_isolated_worktree=yes\n'
+    printf 'native_windows_launcher_self_deleted=yes\n'
+  } > "$EVIDENCE_FILE"
+fi
 STATE_OUT=$(cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
   "$ROOT/bin/fm-crew-state.sh" "$ID")
 [ "$STATE_OUT" = "state: unknown · source: pane · harness state unavailable (unknown codex-unverified)" ] \
@@ -135,6 +154,14 @@ printf '%s\n' "$TREEHOUSE_OUT" | awk '$2 == "available" { found = 1 } END { exit
   || fail "teardown did not return the target worktree: $TREEHOUSE_OUT"
 if herdr pane get "$PANE" --session "$SESSION" >/dev/null 2>&1; then
   fail "teardown retained the Herdr pane"
+fi
+if [ -n "$EVIDENCE_FILE" ]; then
+  {
+    printf 'metadata_after_teardown=absent\n'
+    printf 'worker_edit_after_teardown=absent\n'
+    printf 'herdr_pane_after_teardown=absent\n'
+    printf 'treehouse_worktree_available_after_teardown=yes\n'
+  } >> "$EVIDENCE_FILE"
 fi
 WT=
 [ -z "$(git -C "$HOST" status --short)" ] || fail "teardown changed the host repository"

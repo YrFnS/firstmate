@@ -847,6 +847,7 @@ remove_spawn_artifacts() {
     "$STATE/$ID.cursor-session" "$STATE/$ID.control-relaunch" \
     "$STATE/$ID.control-relaunch.meta-prior" "$STATE/$ID.control-relaunch.brief-prior" \
     "$STATE/$ID.control-relaunch.note" \
+    "$STATE/$ID.herdr-launch.sh" \
     "$STATE/$ID.busy" "$STATE/$ID.busy-state" "$STATE/$ID.busy-gen"
   [ -z "${TASK_TMP:-}" ] || rm -rf -- "$TASK_TMP"
 }
@@ -1953,7 +1954,7 @@ validate_spawn_worktree() {  # <source> <inspect-target>
 }
 
 arm_created_endpoint_rollback() {
-  [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] || return 0
+  { [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ]; } || return 0
   [ "${FM_BACKEND_CREATE_OCCURRED:-0}" = 1 ] || return 0
   SPAWN_ENDPOINT_CREATED=1
   case "$BACKEND" in
@@ -2376,9 +2377,9 @@ fi
 # endpoint. Adapter create functions expose partial post-create state so a
 # verification failure cannot leave an unrecorded live endpoint; a duplicate
 # preflight failure leaves FM_BACKEND_CREATE_OCCURRED=0 and owns nothing. Scope
-# this added rollback to fresh host-root ordinary tasks; relaunches reuse their
-# endpoint and current non-host lifecycle behavior remains upstream-owned.
-if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" != secondmate ] \
+# this rollback to fresh host-root or secondmate tasks; relaunches reuse their
+# endpoint and current non-host ordinary-task lifecycle remains upstream-owned.
+if { [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ]; } \
    && [ "$RELAUNCH" -eq 0 ] && [ "$BACKEND" != orca ]; then
   SPAWN_ENDPOINT_CREATED=1
   SPAWN_ABORT_CLEANUP=1
@@ -3036,7 +3037,11 @@ sq_worktree=$(shell_quote "$WT")
 sq_claude_settings=$(shell_quote "$STATE/$ID.claude-settings.json")
 sq_codex_notify=
 if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
-  codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify(["bash", "-c", "touch -- " + process.argv[1]]))' "$sq_turnend")
+  codex_notify_bash=$(type -P bash) || { echo "error: codex turn-end notification requires bash" >&2; exit 1; }
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*) codex_notify_bash=$(cygpath -w "$codex_notify_bash") ;;
+  esac
+  codex_notify=$(node -e 'process.stdout.write("notify=" + JSON.stringify([process.argv[1], "-c", "touch -- " + process.argv[2]]))' "$codex_notify_bash" "$sq_turnend")
   sq_codex_notify=$(shell_quote "$codex_notify")
 fi
 sq_opencode_config=
@@ -3130,25 +3135,55 @@ spawn_record_traceparent() {
   return "$status"
 }
 
-# Export GOTMPDIR into the crewmate's pane shell so the agent and every child
-# process (go build, go test, ...) inherit it. Sent before the launch command so
-# the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
-# Send through the exact channel that already ships GOTMPDIR, so every backend
-# and harness - ship, scout, and secondmate - gets it before launch. Skipped
-# entirely when trace context is off.
-if [ -n "$SPAWN_TRACEPARENT" ]; then
-  if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
-    if ! spawn_record_traceparent; then
+# Native Windows Treehouse enters cmd.exe, so run the POSIX launch contract in
+# Git Bash instead of typing env assignments into cmd. The one-shot script
+# deletes itself before launch and carries GOTMPDIR and any trace carrier into
+# the agent process.
+HERDR_WINDOWS_LAUNCH=
+if [ "$BACKEND" = herdr ]; then
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*)
+      HERDR_WINDOWS_LAUNCH="$STATE/$ID.herdr-launch.sh"
+      {
+        printf '#!/usr/bin/env bash\n'
+        printf 'rm -f -- "$0"\n'
+        printf 'export GOTMPDIR=%s\n' "$(shell_quote "$TASK_TMP/gotmp")"
+        if [ -n "$SPAWN_TRACEPARENT" ]; then
+          if spawn_record_traceparent; then
+            printf 'export TRACEPARENT=%s\n' "$(shell_quote "$SPAWN_TRACEPARENT")"
+          else
+            LAUNCH="unset TRACEPARENT; $LAUNCH"
+          fi
+        fi
+        printf '%s\n' "$LAUNCH"
+      } > "$HERDR_WINDOWS_LAUNCH"
+      chmod 600 "$HERDR_WINDOWS_LAUNCH"
+      herdr_windows_bash=$(type -P bash) || { echo "error: native Windows Herdr launch requires bash" >&2; exit 1; }
+      LAUNCH="\"$(cygpath -w "$herdr_windows_bash")\" \"$(cygpath -w "$HERDR_WINDOWS_LAUNCH")\""
+      ;;
+  esac
+fi
+if [ -z "$HERDR_WINDOWS_LAUNCH" ]; then
+  # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
+  # process (go build, go test, ...) inherit it. Sent before the launch command so
+  # the env is set when the agent starts; the brief sleep lets the export land.
+  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+  # Send through the exact channel that already ships GOTMPDIR, so every backend
+  # and harness - ship, scout, and secondmate - gets it before launch. Skipped
+  # entirely when trace context is off.
+  if [ -n "$SPAWN_TRACEPARENT" ]; then
+    if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
+      if ! spawn_record_traceparent; then
+        LAUNCH="unset TRACEPARENT; $LAUNCH"
+      fi
+    else
+      TRACE_SEND_STATUS=$?
+      if [ "$TRACE_SEND_STATUS" -eq 2 ]; then
+        echo "error: trace-context input could not be cleared for $W; refusing to append the launch command" >&2
+        exit 1
+      fi
       LAUNCH="unset TRACEPARENT; $LAUNCH"
     fi
-  else
-    TRACE_SEND_STATUS=$?
-    if [ "$TRACE_SEND_STATUS" -eq 2 ]; then
-      echo "error: trace-context input could not be cleared for $W; refusing to append the launch command" >&2
-      exit 1
-    fi
-    LAUNCH="unset TRACEPARENT; $LAUNCH"
   fi
 fi
 sleep 0.3

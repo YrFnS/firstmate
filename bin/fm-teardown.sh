@@ -2337,7 +2337,8 @@ cleanup_firstmate_home_children() {
       "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token" \
       "$sub_state/$child_id.muse-session" "$sub_state/$child_id.muse-session-current" \
       "$sub_state/$child_id.cursor-session" \
-      "$sub_state/$child_id.claude-settings.json" "$sub_state/$child_id.opencode-turn-end.js"
+      "$sub_state/$child_id.claude-settings.json" "$sub_state/$child_id.opencode-turn-end.js" \
+      "$sub_state/$child_id.herdr-launch.sh"
   done
 }
 
@@ -2663,7 +2664,8 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
   "$STATE/$ID.muse-session-current" "$STATE/$ID.cursor-session" \
   "$STATE/$ID.claude-settings.json" "$STATE/$ID.opencode-turn-end.js" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
-  "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note"
+  "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
+  "$STATE/$ID.herdr-launch.sh"
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then

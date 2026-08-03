@@ -2934,8 +2934,9 @@ test_current_path_reads_cwd() {
   # shell instead of trusting the top-level PowerShell cwd.
   printf '{"result":{"pane":{"cwd":"/tmp/pane-creation-dir","foreground_cwd":"/tmp/fake-worktree"}}}\n' > "$resp/1.out"
   printf '{"result":{"pane":{"cwd":"C:\\\\Users\\\\captain\\\\fake-worktree"}}}\n' > "$resp/2.out"
-  printf '%s\n' '__FM_HERDR_CWD_BEGIN__' '/c/Users/captain/' 'fake-worktree' '__FM_HERDR_CWD_END__' > "$resp/4.out"
-  printf '{"result":{"pane":{"cwd":"/tmp/frozen-posix-cwd"}}}\n' > "$resp/5.out"
+  printf '%s\n' '__FM_HERDR_CWD_BEGIN__; pwd; echo __FM_HERDR_CWD_END__' > "$resp/4.out"
+  printf '%s\n' '__FM_HERDR_CWD_BEGIN__' 'C:\Users\captain\fake-worktree' '__FM_HERDR_CWD_END__' > "$resp/6.out"
+  printf '{"result":{"pane":{"cwd":"/tmp/frozen-posix-cwd"}}}\n' > "$resp/7.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_current_path default:w1:p2' "$ROOT" )
@@ -2949,6 +2950,7 @@ test_current_path_reads_cwd() {
   [ -z "$out" ] || fail "current_path trusted a frozen POSIX cwd without foreground_cwd: '$out'"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''get'$'\x1f''w1:p2' "current_path did not call pane get"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''run'$'\x1f''w1:p2' "Windows current_path did not run the marked shell probe"
+  assert_contains "$(cat "$log")" "echo __FM_HERDR_CWD_BEGIN__ & cd & echo __FM_HERDR_CWD_END__" "Windows current_path did not fall back to the cmd.exe cwd probe"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' "Windows current_path did not read the marked shell probe"
   pass "fm_backend_herdr_current_path: prefers foreground_cwd and actively probes native Windows shells"
 }
