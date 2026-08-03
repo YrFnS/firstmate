@@ -3146,7 +3146,7 @@ if [ "$BACKEND" = herdr ]; then
       HERDR_WINDOWS_LAUNCH="$STATE/$ID.herdr-launch.sh"
       {
         printf '#!/usr/bin/env bash\n'
-        printf 'rm -f -- "$0"\n'
+        printf "rm -f -- \"\$0\"\n"
         printf 'export GOTMPDIR=%s\n' "$(shell_quote "$TASK_TMP/gotmp")"
         if [ -n "$SPAWN_TRACEPARENT" ]; then
           if spawn_record_traceparent; then
