@@ -66,7 +66,8 @@ set -u
   printf 'cwd=%s\n' "$(pwd -P)"
   printf 'host=%s\n' "$FM_HOST_ROOT"
   printf 'target=%s\n' "$FM_TARGET_WORKTREE"
-  printf 'target_top=%s\n' "$(git rev-parse --show-toplevel)"
+  target_top=$(git rev-parse --show-toplevel)
+  printf 'target_top=%s\n' "$(cd "$target_top" && pwd -P)"
   printf 'target_instructions=%s\n' "$(cat ./AGENTS.md)"
 } > "$FM_HOME/worker-observation"
 printf 'worker edit\n' > "$FM_TARGET_WORKTREE/worker-edit.txt"

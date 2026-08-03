@@ -33,6 +33,14 @@ The required CI lane uses the pinned installers in `bin/fm-install-herdr.sh` and
 Those script headers own release assets, checksums, download bounds, and post-install gates.
 Real harness credential tests remain opt-in rather than part of default CI.
 
+## Native Windows
+
+Herdr is the verified native-Windows runtime backend.
+Run Firstmate commands from GNU Bash with `cygpath` available so drive-absolute Herdr paths can be normalized for shell helpers.
+On Windows, Herdr can omit `foreground_cwd` and keep its top-level `cwd` bound to PowerShell while Treehouse enters a Bash subshell.
+The adapter therefore reads the live nested cwd through a marked pane probe before worker launch instead of trusting that frozen top-level path.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#host-root-task-routing) owns the dated native-Windows runtime evidence.
+
 ## Watching and task containers
 
 The ordinary topology puts one task tab per endpoint in the exact workspace of the Firstmate or secondmate that launches it.
