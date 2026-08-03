@@ -120,6 +120,7 @@ Claude, Codex, OpenCode, Pi, pi-signed, Grok, and Kimi share that backend cleanu
 ### Host-root task routing
 
 The host-root path was verified on 2026-08-01 with Herdr 0.7.5 and Treehouse 2.0.0 through the real isolated acceptance.
+It was reverified natively on Windows on 2026-08-03 with Herdr 0.7.5-preview.2026-07-29-44b3adb12552 and Treehouse 2.1.1 through GNU Bash 5.3.9 and Git for Windows 2.54.0.
 The test's supervisor-side spawn shape was:
 
 ```sh
@@ -146,10 +147,32 @@ bash tests/fm-backend-herdr-host-root-e2e.test.sh
 # ok - real Herdr host-root spawn, completion, decision inventory, and teardown
 ```
 
+The native-Windows version probes and real-runtime entry points were:
+
+```sh
+herdr --version
+treehouse --version
+bash --version | head -1
+git --version
+bash tests/fm-backend-herdr-smoke.test.sh
+bash tests/fm-backend-herdr-host-root-e2e.test.sh
+```
+
+Observed bounded output:
+
+```text
+herdr 0.7.5-preview.2026-07-29-44b3adb12552
+v2.1.1
+GNU bash, version 5.3.9(1)-release (x86_64-pc-cygwin)
+git version 2.54.0.windows.1
+ok - real herdr: current_path reads the pane's live cwd
+ok - real Herdr host-root spawn, completion, decision inventory, and teardown
+```
+
 ## Herdr
 
 The compatibility floor is protocol 14.
-The latest active verification uses Herdr 0.7.5 protocol 17 on macOS aarch64, with earlier 0.7.5 protocol-16, 0.7.4, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
+The latest protocol-feature verification uses Herdr 0.7.5 protocol 17 on macOS aarch64, while the native-Windows task-routing verification uses the preview build recorded above; earlier 0.7.5 protocol-16, 0.7.4, protocol-14, and 0.7.3 evidence remains where it defines current behavior or fallbacks.
 Protocol 17 keeps every protocol-16 feature gate satisfied; the event and workspace-move floors remain 16.
 
 Core read-only probes:

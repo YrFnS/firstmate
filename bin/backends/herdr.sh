@@ -481,6 +481,9 @@ fm_backend_herdr_canonical_socket_path() {  # <socket-path>
   local socket=$1 sock_dir sock_base
   [ -n "$socket" ] || return 1
   case "$socket" in
+    [A-Za-z]:[\\/]*) socket=$(cygpath -u "$socket" 2>/dev/null) || return 1 ;;
+  esac
+  case "$socket" in
     /*) ;;
     *) return 1 ;;
   esac
@@ -2295,10 +2298,51 @@ fm_backend_herdr_target_ready() {  # <target>
 # `.result.pane.foreground_cwd` tracks the ACTUALLY RUNNING foreground
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
+# Native Windows Herdr omits `foreground_cwd`, and its drive-absolute `cwd`
+# follows the top-level PowerShell but not the Git Bash subshell entered by
+# `treehouse get`. In that platform-specific shape, probe the pre-agent shell
+# with markers and read the last complete path block from the pane.
 fm_backend_herdr_current_path() {  # <target>
+  local path out line marker_begin="__FM_HERDR_CWD_BEGIN__" marker_end="__FM_HERDR_CWD_END__" in_block=0 chunk="" last=""
   fm_backend_herdr_target_ready "$1" || return 0
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
-    | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
+  path=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+    | jq -r '.result.pane | (.foreground_cwd // (.cwd | strings | select(test("^[A-Za-z]:[\\\\/]")))) // empty' 2>/dev/null)
+  case "$path" in
+    [A-Za-z]:[\\/]*)
+      fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" \
+        "echo $marker_begin; pwd; echo $marker_end" >/dev/null 2>&1 || return 0
+      sleep "${FM_BACKEND_HERDR_CWD_PROBE_DELAY:-0.3}"
+      out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" \
+        --source recent --lines 200 2>/dev/null) || return 0
+      while IFS= read -r line; do
+        line=${line%$'\r'}
+        if [ "$line" = "$marker_begin" ]; then
+          in_block=1
+          chunk=""
+          continue
+        fi
+        if [ "$line" = "$marker_end" ]; then
+          case "$chunk" in /*|[A-Za-z]:[\\/]*) last=$chunk ;; esac
+          in_block=0
+          continue
+        fi
+        [ "$in_block" -eq 1 ] || continue
+        case "$line" in ''|Path|---*) continue ;; esac
+        if [ -n "$chunk" ]; then
+          chunk="$chunk$line"
+        else
+          case "$line" in /*|[A-Za-z]:[\\/]*) chunk=$line ;; esac
+        fi
+      done <<EOF
+$out
+EOF
+      case "$last" in
+        [A-Za-z]:[\\/]*) cygpath -u "$last" 2>/dev/null || printf '%s\n' "$last" ;;
+        *) printf '%s\n' "$last" ;;
+      esac
+      ;;
+    *) printf '%s\n' "$path" ;;
+  esac
 }
 
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
