@@ -241,7 +241,7 @@ Every non-forced host-root ship teardown repeats worktree safety checks after th
 Host-root briefs carry `<!-- firstmate-execution-mode: host-root -->`, require the worker to verify its target cwd and read applicable target instructions, and keep the unrelated host context out of the worker session.
 Spawn rejects a legacy brief without that marker rather than weakening the contract silently.
 Host-root ship brief generation and spawn support `no-mistakes` and `direct-PR` delivery but reject `local-only` because its guarded landing path changes the target project's primary checkout.
-Host-root scouts may inspect `local-only` targets and retain their configured mode and autonomy, but promotion rejects them while that mode remains active.
+Host-root scouts may inspect `local-only` targets and record no delivery posture; promotion requires an explicit mode, rejects `local-only`, and replaces any legacy posture fields with that explicit contract.
 
 Harness integration is additive for the primary supervisor and target-native for ordinary workers.
 The [`harness-adapters` skill](../.agents/skills/harness-adapters/SKILL.md#host-root-task-integration) owns each harness's task-signal shape, and each signal is installed once.
