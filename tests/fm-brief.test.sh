@@ -358,8 +358,11 @@ test_unset_and_empty_host_mode_match() {
   local home="$TMP_ROOT/default-host-home" expected kind args
   mkdir -p "$home/data"
   for kind in ship scout; do
-    args=()
-    [ "$kind" = ship ] || args+=(--scout)
+    if [ "$kind" = ship ]; then
+      args=(--mode no-mistakes)
+    else
+      args=(--scout)
+    fi
     env -u FM_HOST_ROOT FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
       "$ROOT/bin/fm-brief.sh" byte-compat sample "${args[@]}" >/dev/null 2>&1
     expected="$TMP_ROOT/$kind-default-brief.md"
