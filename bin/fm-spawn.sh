@@ -410,6 +410,10 @@ else
     }
   fi
 fi
+if [ "$KIND" = secondmate ]; then
+  MODE=secondmate
+  YOLO=off
+fi
 
 spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
@@ -806,8 +810,8 @@ write_abort_meta() {
     echo "project=${PROJ_ABS:-}"
     echo "harness=${HARNESS:-unknown}"
     echo "kind=$KIND"
-    echo "mode=${MODE:-no-mistakes}"
-    echo "yolo=${YOLO:-off}"
+    [ -z "${MODE:-}" ] || echo "mode=$MODE"
+    [ -z "${YOLO:-}" ] || echo "yolo=$YOLO"
     echo "tasktmp=${TASK_TMP:-}"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
@@ -2900,12 +2904,7 @@ fi
 # (fm-teardown.sh defaults an absent mode to no-mistakes, and fm-promote.sh
 # requires an explicit mode when a scout is promoted to a ship task).
 if [ "$KIND" = secondmate ]; then
-  MODE=secondmate
-  YOLO=off
   : "${SECONDMATE_PROJECTS:=}"
-elif [ "$KIND" = scout ]; then
-  MODE=
-  YOLO=
 fi
 
 # Resolve the optional default-off W3C trace context (bin/fm-trace-context-lib.sh,
