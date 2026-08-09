@@ -1137,7 +1137,7 @@ install_integrated_autoarm() {
   bash_path=$(type -P bash) || fail "test host must provide bash"
   cat > "$dir/fake-claude" <<SH
 #!$bash_path
-exec -a fake-claude "$bash_path" "\$@"
+exec -a claude "$bash_path" "\$@"
 SH
   chmod +x "$dir/fake-claude"
 }
