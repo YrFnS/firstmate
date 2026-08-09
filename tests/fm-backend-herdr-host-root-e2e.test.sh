@@ -65,6 +65,18 @@ make_repo "$HOST" make_host
 make_repo "$PROJECT" make_target
 mkdir -p "$HOME_ROOT/data" "$HOME_ROOT/state" "$HOME_ROOT/config" "$FAKEBIN"
 
+cat > "$FAKEBIN/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  --version) printf '%s\n' '0.2.4' ;;
+  'update --help') printf '%s\n' 'usage: tasks-axi update <id> --archive-body' ;;
+  'mv --help') printf '%s\n' 'usage: tasks-axi mv <id> [<id>...]' ;;
+  'hold --help') printf '%s\n' 'usage: tasks-axi hold <id> --kind captain' ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$FAKEBIN/tasks-axi"
+
 cat > "$FAKEBIN/codex" <<'SH'
 #!/usr/bin/env bash
 set -u

@@ -23,6 +23,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-host-root-lib.sh
 . "$SCRIPT_DIR/fm-host-root-lib.sh"
 
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+
 MODE=
 YOLO=
 MODE_SET=0
@@ -72,7 +77,36 @@ case "$YOLO" in
 esac
 
 ID=${POS[0]}
+fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+CONTROL_LOCK="$STATE/.control-$ID.lock"
+CONTROL_LOCK_HELD=0
+META_LOCK=
+META_LOCK_HELD=0
+TMP=
+promote_cleanup() {
+  local status=$?
+  [ -z "$TMP" ] || rm -f -- "$TMP" 2>/dev/null || true
+  if [ "$META_LOCK_HELD" = 1 ]; then
+    META_LOCK_HELD=0
+    fm_lock_release "$META_LOCK" || true
+  fi
+  if [ "$CONTROL_LOCK_HELD" = 1 ]; then
+    CONTROL_LOCK_HELD=0
+    fm_lock_release "$CONTROL_LOCK" || true
+  fi
+  return "$status"
+}
+trap promote_cleanup EXIT
+fm_lock_try_acquire "$CONTROL_LOCK" || {
+  echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
+  exit 1
+}
+CONTROL_LOCK_HELD=1
 META="$STATE/$ID.meta"
+[ -d "$STATE" ] || { echo "error: state dir not found: $STATE" >&2; exit 1; }
+META_LOCK=$(fm_meta_lock_path "$META") || exit 1
+fm_lock_acquire_wait "$META_LOCK"
+META_LOCK_HELD=1
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
 fm_host_root_assert_task_cwd "$FM_ROOT" "$META" || exit $?
 if grep -q '^host_root=.' "$META" && [ "$MODE" = local-only ]; then
@@ -83,7 +117,7 @@ fi
 "$FM_ROOT/bin/fm-guard.sh" || true
 grep -qx 'kind=scout' "$META" || { echo "error: task $ID is not a scout task (kind=scout not in meta)" >&2; exit 1; }
 
-TMP="$META.tmp"
+TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
 grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
 {
   echo "kind=ship"
@@ -91,6 +125,9 @@ grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
   echo "yolo=$YOLO"
 } >> "$TMP"
 mv "$TMP" "$META"
+TMP=
+fm_lock_release "$META_LOCK"
+META_LOCK_HELD=0
 
 HOME_Q=$(printf '%q' "$FM_HOME")
 SEND=bin/fm-send.sh

@@ -982,7 +982,7 @@ test_decision_actions_use_durable_host_owner() {
   cat > "$fb/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
-  "--version ") printf '%s\n' 'tasks-axi 0.2.2' ;;
+  "--version ") printf '%s\n' 'tasks-axi 0.2.4' ;;
   "update --help") printf '%s\n' '--archive-body' ;;
   "mv --help") printf '%s\n' '[<id>...]' ;;
   "hold --help") printf '%s\n' '--kind captain' ;;
