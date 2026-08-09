@@ -139,7 +139,7 @@ STATE_OUT=$(cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_
 [ "$STATE_OUT" = "state: unknown · source: pane · harness state unavailable (unknown codex-unverified)" ] \
   || fail "Codex completion signal bypassed semantic busy-state uncertainty: $STATE_OUT"
 
-(cd "$HOST" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
+(cd "$HOST" && PATH="$FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_ROOT" FM_HOST_ROOT="$HOST_REAL" \
   "$ROOT/bin/fm-decision-hold.sh" complete "$ID" --none >/dev/null) \
   || fail "real Herdr host-root decision inventory failed"
 
