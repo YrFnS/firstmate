@@ -56,6 +56,10 @@ make_tmux_stub() {  # <dir>
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+if [ "${1:-}" = -S ]; then
+  [ -z "${FM_FAKE_SOCKET_LOG:-}" ] || printf '%s\n' "$2" >> "$FM_FAKE_SOCKET_LOG"
+  shift 2
+fi
 case "${1:-}" in
   send-keys)
     shift
@@ -111,6 +115,7 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
+  list-panes) [ -f "$D/panes" ] && cat "$D/panes"; exit 0 ;;
 esac
 exit 0
 SH
@@ -1299,6 +1304,32 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding the work"
 }
 
+test_spawn_relaunch_restores_recorded_host_tmux_context() {
+  local dir host meta socket socket_log out rc
+  dir=$(new_case host-context rl30)
+  host="$dir/host"
+  socket="$dir/task.sock"
+  socket_log="$dir/fake/socket-log"
+  mkdir -p "$host"
+  printf '# host\n' > "$host/AGENTS.md"
+  add_ship_task "$dir" rl30 claude
+  printf '\nDelivery contract: mode=no-mistakes\n<!-- firstmate-execution-mode: host-root -->\n' >> "$dir/home/data/rl30/brief.md"
+  meta="$dir/home/state/rl30.meta"
+  printf 'host_root=%s\ntmux_window_marker=rl30-marker\ntmux_socket_path=%s\n' "$host" "$socket" >> "$meta"
+  printf '%%1|@1|fmses:fm-rl30|fmses:fm-rl30.0|fmses:1|fmses:1.0|rl30-marker\n' > "$dir/fake/panes"
+  printf 'zsh' > "$dir/fake/command"
+
+  out=$(cd "$host" && env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_FAKE_SOCKET_LOG="$socket_log" \
+    FM_SPAWN_NO_GUARD=1 "$SPAWN" rl30 --relaunch --harness claude 2>&1); rc=$?
+  expect_code 0 "$rc" "direct host-root relaunch should use its recorded endpoint context: $out"
+  assert_grep "$socket" "$socket_log" "direct host-root relaunch did not select the recorded tmux socket"
+  [ "$(grep -c '^host_root=' "$meta")" -eq 1 ] || fail "relaunch duplicated recorded host ownership"
+  [ "$(meta_field "$dir" rl30 tmux_window_marker)" = rl30-marker ] || fail "relaunch lost the recorded tmux marker"
+  [ "$(meta_field "$dir" rl30 tmux_socket_path)" = "$socket" ] || fail "relaunch lost the recorded tmux socket"
+  pass "fm-spawn --relaunch: recorded host and tmux identity govern replacement launch"
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
@@ -1344,3 +1375,4 @@ test_spawn_relaunch_refuses_a_live_agent
 test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
+test_spawn_relaunch_restores_recorded_host_tmux_context

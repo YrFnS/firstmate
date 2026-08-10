@@ -24,7 +24,8 @@ install_pi_watch_extension_fixture() {
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
   mkdir -p "$repo/bin"
   cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
-  chmod +x "$repo/bin/fm-operational-input.sh"
+  cp "$ROOT/bin/fm-wake-lib.sh" "$repo/bin/fm-wake-lib.sh"
+  chmod +x "$repo/bin/fm-operational-input.sh" "$repo/bin/fm-wake-lib.sh"
   cat > "$repo/node_modules/@earendil-works/pi-coding-agent/package.json" <<'JSON'
 {"name":"@earendil-works/pi-coding-agent","type":"module","exports":"./index.js"}
 JSON
@@ -397,12 +398,15 @@ EOF
 }
 
 test_pi_busy_wakes_are_late_validated_and_superseded() {
-  local repo home plugin log trigger_two trigger_three stop out status
+  local repo home plugin log trigger_two trigger_three restore_waiting successor_ready rotate_ready stop out status
   repo="$TMP_ROOT/pi-keyed-wake-root"
   home="$TMP_ROOT/pi-keyed-wake-home"
   log="$TMP_ROOT/pi-keyed-wake.log"
   trigger_two="$TMP_ROOT/pi-keyed-wake.two"
   trigger_three="$TMP_ROOT/pi-keyed-wake.three"
+  restore_waiting="$TMP_ROOT/pi-keyed-wake.restore-waiting"
+  successor_ready="$TMP_ROOT/pi-keyed-wake.successor-ready"
+  rotate_ready="$TMP_ROOT/pi-keyed-wake.rotate-ready"
   stop="$TMP_ROOT/pi-keyed-wake.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   install_pi_watch_extension_fixture "$repo"
@@ -411,26 +415,31 @@ test_pi_busy_wakes_are_late_validated_and_superseded() {
 #!/usr/bin/env bash
 printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
-printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
 case "$count" in
   1)
+    printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
     printf '1\t1\tsignal\ttask.status\tsignal: cycle one\n' > "$FM_HOME/state/.wake-queue"
     printf 'signal: cycle one\n'
     exit 0
     ;;
   2)
+    printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
     while [ ! -e "$FM_TRIGGER_TWO" ]; do sleep 0.02; done
     printf '2\t2\tsignal\ttask.status\tsignal: cycle two\n' >> "$FM_HOME/state/.wake-queue"
     printf 'signal: cycle two\n'
     exit 0
     ;;
   3)
+    : > "$FM_RESTORE_WAITING"
+    while [ ! -e "$FM_SUCCESSOR_READY" ]; do sleep 0.02; done
+    printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
     while [ ! -e "$FM_TRIGGER_THREE" ]; do sleep 0.02; done
     printf '3\t3\tsignal\ttask.status\tsignal: cycle three\n' >> "$FM_HOME/state/.wake-queue"
     printf 'signal: cycle three\n'
     exit 0
     ;;
   *)
+    printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
     trap 'exit 0' TERM INT
     while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
     ;;
@@ -438,8 +447,11 @@ esac
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
   out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" \
-    FM_TRIGGER_TWO="$trigger_two" FM_TRIGGER_THREE="$trigger_three" FM_STOP_FILE="$stop" \
+    FM_TRIGGER_TWO="$trigger_two" FM_TRIGGER_THREE="$trigger_three" \
+    FM_RESTORE_WAITING="$restore_waiting" FM_SUCCESSOR_READY="$successor_ready" \
+    FM_ROTATE_READY="$rotate_ready" FM_STOP_FILE="$stop" \
     node --input-type=module 2>&1 <<'EOF'
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -476,16 +488,28 @@ await tool.execute("tool-call-keyed-wake", {}, undefined, undefined, {});
 await waitFor(() => rows().length >= 2, "first actionable cycle did not restore its successor");
 if (piQueue.length !== 1) throw new Error(`busy cycle entered Pi's queue early: ${piQueue.join(" | ")}`);
 
-writeFileSync(`${process.env.FM_HOME}/state/.wake-queue`, "");
+const rotator = spawn("bash", ["-lc", '. "$FM_ROOT_OVERRIDE/bin/fm-wake-lib.sh"; trap \'fm_lock_release "$FM_WAKE_QUEUE_LOCK"\' EXIT; fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; mv "$FM_WAKE_QUEUE" "$FM_WAKE_QUEUE.rotated"; : > "$FM_ROTATE_READY"; sleep 0.2; : > "$FM_WAKE_QUEUE"; rm -f "$FM_WAKE_QUEUE.rotated"'], {
+  env: process.env,
+  stdio: "ignore",
+});
+const rotationComplete = new Promise((resolve, reject) => {
+  rotator.on("error", reject);
+  rotator.on("close", (code) => code === 0 ? resolve() : reject(new Error(`queue rotator exited ${code}`)));
+});
+await waitFor(() => existsSync(process.env.FM_ROTATE_READY), "queue rotation did not enter its serialized window");
 await handlers.get("agent_settled")?.({}, {});
-await new Promise((resolve) => setTimeout(resolve, 80));
+await rotationComplete;
 if (piQueue.length !== 1 || piQueue[0] !== "captain follow-up") {
   throw new Error(`consumed wake changed an unrelated captain follow-up: ${piQueue.join(" | ")}`);
 }
 
-await handlers.get("agent_start")?.({}, {});
 writeFileSync(process.env.FM_TRIGGER_TWO, "go\n");
+await waitFor(() => existsSync(process.env.FM_RESTORE_WAITING), "second actionable cycle did not start successor restoration");
+await handlers.get("agent_start")?.({}, {});
+writeFileSync(process.env.FM_SUCCESSOR_READY, "go\n");
 await waitFor(() => rows().length >= 3, "second actionable cycle did not restore its successor");
+await new Promise((resolve) => setTimeout(resolve, 80));
+if (piQueue.length !== 1) throw new Error(`wake ignored delivery-time busy state: ${piQueue.join(" | ")}`);
 writeFileSync(process.env.FM_TRIGGER_THREE, "go\n");
 await waitFor(() => rows().length >= 4, "third actionable cycle did not restore its successor");
 if (piQueue.length !== 1) throw new Error(`superseded cycles entered Pi's queue early: ${piQueue.join(" | ")}`);

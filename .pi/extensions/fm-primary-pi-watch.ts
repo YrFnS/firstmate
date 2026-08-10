@@ -256,14 +256,23 @@ export default function (pi: ExtensionAPI) {
     !calmTranscriptClassIsVisible(itemClass);
 
   function wakeQueueRows(): string[][] | null {
-    try {
-      return readFileSync(`${state}/.wake-queue`, "utf8")
-        .split(/\r?\n/)
-        .map((line: string) => line.split("\t"))
-        .filter((fields: string[]) => fields.length >= 5);
-    } catch {
-      return null;
-    }
+    const result = spawnSync(
+      "bash",
+      [
+        "-lc",
+        '. "$FM_ROOT_OVERRIDE/bin/fm-wake-lib.sh"; trap \'fm_lock_release "$FM_WAKE_QUEUE_LOCK"\' EXIT; fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"; [ ! -e "$FM_WAKE_QUEUE" ] || cat -- "$FM_WAKE_QUEUE"',
+      ],
+      {
+        cwd: fmRoot,
+        encoding: "utf8",
+        env: { ...process.env, FM_HOME: fmHome, FM_ROOT_OVERRIDE: fmRoot, FM_STATE_OVERRIDE: state },
+      },
+    );
+    if (result.status !== 0 || typeof result.stdout !== "string") return null;
+    return result.stdout
+      .split(/\r?\n/)
+      .map((line: string) => line.split("\t"))
+      .filter((fields: string[]) => fields.length >= 5);
   }
 
   function wakeQueueTokens(message: string): WakeQueueToken[] | null {
@@ -279,10 +288,10 @@ export default function (pi: ExtensionAPI) {
   }
 
   function deferredWakeIsQueued(wake: DeferredWake): boolean {
-    if (wake.tokens === null) return true;
+    if (wake.tokens === null) return false;
     if (wake.tokens.length === 0) return false;
     const rows = wakeQueueRows();
-    if (rows === null) return true;
+    if (rows === null) return false;
     const keys = new Set(rows.map((fields) => `${fields[1]}\t${fields[2]}\t${fields[3]}`));
     return wake.tokens.some((token) => keys.has(`${token.seq}\t${token.kind}\t${token.key}`));
   }
@@ -310,7 +319,7 @@ export default function (pi: ExtensionAPI) {
     busyAtClose: boolean,
   ): Promise<void> {
     if (!generationIsLive(owner) || wake.cycle !== owner.latestActionableCycle) return;
-    if (!busyAtClose) {
+    if (!busyAtClose && !agentActive) {
       await sendWake(owner, wake.message);
       return;
     }
@@ -495,7 +504,7 @@ export default function (pi: ExtensionAPI) {
       const predecessor = String(armChild.pid ?? "");
       if (classification.kind === "actionable") {
         const busyAtClose = agentActive;
-        const tokens = busyAtClose ? wakeQueueTokens(classification.message) : null;
+        const tokens = wakeQueueTokens(classification.message);
         owner.latestActionableCycle = id;
         owner.retryFailures = 0;
         owner.restoring = true;

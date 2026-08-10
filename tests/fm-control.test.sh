@@ -78,6 +78,10 @@ make_tmux_stub() {  # <dir> -> echoes fakebin dir
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+if [ "${1:-}" = -S ]; then
+  [ -z "${FM_FAKE_SOCKET_LOG:-}" ] || printf '%s\n' "$2" >> "$FM_FAKE_SOCKET_LOG"
+  shift 2
+fi
 case "${1:-}" in
   send-keys)
     shift
@@ -128,6 +132,9 @@ case "${1:-}" in
     exit 0 ;;
   list-windows)
     if [ -f "$D/windows" ]; then cat "$D/windows"; fi
+    exit 0 ;;
+  list-panes)
+    if [ -f "$D/panes" ]; then cat "$D/panes"; fi
     exit 0 ;;
 esac
 exit 0
@@ -860,6 +867,35 @@ test_fm_send_still_marks_the_same_secondmate_task() {
   pass "fm-control's arrival leaves fm-send's from-firstmate marking untouched"
 }
 
+test_host_root_control_uses_recorded_tmux_identity() {
+  local dir host meta socket socket_log out rc
+  dir=$(new_case host-control)
+  host="$dir/host"
+  socket="$dir/task.sock"
+  socket_log="$dir/fake/socket-log"
+  mkdir -p "$host"
+  printf '# host\n' > "$host/AGENTS.md"
+  add_task "$dir" hostctl claude
+  meta="$dir/home/state/hostctl.meta"
+  printf 'host_root=%s\ntmux_window_marker=hostctl-marker\ntmux_socket_path=%s\n' "$host" "$socket" >> "$meta"
+  printf '%%1|@1|fmses:fm-hostctl|fmses:fm-hostctl.0|fmses:1|fmses:1.0|wrong-marker\n' > "$dir/fake/panes"
+  alive_as "$dir" claude
+  out=$(cd "$host" && env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_FAKE_SOCKET_LOG="$socket_log" \
+    "$CONTROL" hostctl interrupt 2>&1); rc=$?
+  expect_code 2 "$rc" "host-root control should refuse a colliding tmux identity"
+  [ ! -s "$dir/fake/keys" ] || fail "host-root control keyed a window whose marker did not match"
+
+  printf '%%1|@1|fmses:fm-hostctl|fmses:fm-hostctl.0|fmses:1|fmses:1.0|hostctl-marker\n' > "$dir/fake/panes"
+  out=$(cd "$host" && env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_FAKE_SOCKET_LOG="$socket_log" \
+    FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 "$CONTROL" hostctl exit 2>&1); rc=$?
+  expect_code 0 "$rc" "host-root control should act through the recorded tmux endpoint: $out"
+  assert_grep "$socket" "$socket_log" "host-root control did not select the recorded tmux socket"
+  [ "$(literals "$dir")" = /exit ] || fail "host-root control did not stop the recorded agent"
+  pass "fm-control: host-root lifecycle actions bind the recorded tmux identity"
+}
+
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_opencode_interrupts_twice_and_others_once
@@ -895,3 +931,4 @@ test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
 test_secondmate_control_command_carries_no_marker
 test_fm_send_still_marks_the_same_secondmate_task
+test_host_root_control_uses_recorded_tmux_identity

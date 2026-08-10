@@ -761,6 +761,34 @@ if fm_host_root_enabled; then
 	fi
 fi
 
+if [ "$RELAUNCH" -eq 1 ]; then
+	[ "${#POS[@]}" -eq 1 ] || {
+		echo "error: --relaunch takes the task id only; its project or home comes from the task's own record" >&2
+		exit 1
+	}
+	ID=${POS[0]}
+	fm_task_id_creation_valid "$ID" || {
+		echo "error: invalid task id" >&2
+		exit 2
+	}
+	RELAUNCH_META="$STATE/$ID.meta"
+	[ -f "$RELAUNCH_META" ] || {
+		echo "error: --relaunch needs an existing task record; no $RELAUNCH_META" >&2
+		exit 1
+	}
+	fm_host_root_assert_task_cwd "$FM_ROOT" "$RELAUNCH_META" || exit $?
+	if RECORDED_HOST_ROOT=$(fm_host_root_recorded_owner "$RELAUNCH_META"); then
+		HOST_ROOT=$RECORDED_HOST_ROOT
+		FM_HOST_ROOT=$HOST_ROOT
+		export FM_HOST_ROOT
+		HOST_MODE=1
+	else
+		status=$?
+		[ "$status" -eq 1 ] || exit "$status"
+	fi
+	fm_backend_bind_meta_context "$RELAUNCH_META" || exit $?
+fi
+
 if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ] && [ "$MODE" = local-only ]; then
 	echo "error: host-root mode does not support local-only project ${POS[1]:-target}" >&2
 	exit 1
@@ -1227,7 +1255,7 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
 	exit 1
 fi
 SPAWN_TASK_LOCK_HELD=1
-if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
+if [ "$RELAUNCH" -eq 0 ] && { [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; }; then
 	RETAINED_HOST_MODE=0
 	if [ -f "$STATE/$ID.meta" ] && grep -q '^host_root=.' "$STATE/$ID.meta"; then
 		RETAINED_HOST_MODE=1
@@ -1268,6 +1296,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
 	RELAUNCH_TARGET=$FM_BACKEND_VALIDATED_TARGET
 	fm_backend_validate_spawn "$BACKEND" || exit 1
 	fm_backend_source "$BACKEND" || exit 1
+	if [ "$BACKEND" = tmux ] && [ "$HOST_MODE" -eq 1 ]; then
+		TMUX_WINDOW_MARKER=$(fm_meta_get "$RELAUNCH_META" tmux_window_marker)
+		TMUX_SOCKET_PATH=$(fm_meta_get "$RELAUNCH_META" tmux_socket_path)
+	fi
+	fm_backend_assert_recorded_endpoint_identity "$RELAUNCH_META" || exit $?
 	# A relaunch must PROVE the previous agent is gone before it launches another
 	# one into the same endpoint, and only tmux and herdr have a recovery-grade
 	# classifier that can (bin/fm-control-lib.sh owns that capability table).
@@ -2937,7 +2970,7 @@ fi
 preserve_relaunch_meta() {
 	awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree host_root project harness kind mode yolo tasktmp model effort busy_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id tmux_window_marker tmux_socket_path home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
