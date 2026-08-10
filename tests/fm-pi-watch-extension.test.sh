@@ -396,6 +396,119 @@ EOF
   pass "Pi actionable close starts one successor before wake delivery settles"
 }
 
+test_pi_busy_wakes_are_late_validated_and_superseded() {
+  local repo home plugin log trigger_two trigger_three stop out status
+  repo="$TMP_ROOT/pi-keyed-wake-root"
+  home="$TMP_ROOT/pi-keyed-wake-home"
+  log="$TMP_ROOT/pi-keyed-wake.log"
+  trigger_two="$TMP_ROOT/pi-keyed-wake.two"
+  trigger_three="$TMP_ROOT/pi-keyed-wake.three"
+  stop="$TMP_ROOT/pi-keyed-wake.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+case "$count" in
+  1)
+    printf '1\t1\tsignal\ttask.status\tsignal: cycle one\n' > "$FM_HOME/state/.wake-queue"
+    printf 'signal: cycle one\n'
+    exit 0
+    ;;
+  2)
+    while [ ! -e "$FM_TRIGGER_TWO" ]; do sleep 0.02; done
+    printf '2\t2\tsignal\ttask.status\tsignal: cycle two\n' >> "$FM_HOME/state/.wake-queue"
+    printf 'signal: cycle two\n'
+    exit 0
+    ;;
+  3)
+    while [ ! -e "$FM_TRIGGER_THREE" ]; do sleep 0.02; done
+    printf '3\t3\tsignal\ttask.status\tsignal: cycle three\n' >> "$FM_HOME/state/.wake-queue"
+    printf 'signal: cycle three\n'
+    exit 0
+    ;;
+  *)
+    trap 'exit 0' TERM INT
+    while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+    ;;
+esac
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" \
+    FM_TRIGGER_TWO="$trigger_two" FM_TRIGGER_THREE="$trigger_three" FM_STOP_FILE="$stop" \
+    node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+const handlers = new Map();
+const piQueue = ["captain follow-up"];
+const pi = {
+  on(event, handler) {
+    handlers.set(event, handler);
+  },
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async (message) => {
+    piQueue.push(message);
+  },
+};
+const rows = () => existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+  : [];
+async function waitFor(predicate, message) {
+  for (let i = 0; i < 500; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(message);
+}
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await handlers.get("agent_start")?.({}, {});
+await tool.execute("tool-call-keyed-wake", {}, undefined, undefined, {});
+await waitFor(() => rows().length >= 2, "first actionable cycle did not restore its successor");
+if (piQueue.length !== 1) throw new Error(`busy cycle entered Pi's queue early: ${piQueue.join(" | ")}`);
+
+writeFileSync(`${process.env.FM_HOME}/state/.wake-queue`, "");
+await handlers.get("agent_settled")?.({}, {});
+await new Promise((resolve) => setTimeout(resolve, 80));
+if (piQueue.length !== 1 || piQueue[0] !== "captain follow-up") {
+  throw new Error(`consumed wake changed an unrelated captain follow-up: ${piQueue.join(" | ")}`);
+}
+
+await handlers.get("agent_start")?.({}, {});
+writeFileSync(process.env.FM_TRIGGER_TWO, "go\n");
+await waitFor(() => rows().length >= 3, "second actionable cycle did not restore its successor");
+writeFileSync(process.env.FM_TRIGGER_THREE, "go\n");
+await waitFor(() => rows().length >= 4, "third actionable cycle did not restore its successor");
+if (piQueue.length !== 1) throw new Error(`superseded cycles entered Pi's queue early: ${piQueue.join(" | ")}`);
+const latest = readFileSync(`${process.env.FM_HOME}/state/.wake-queue`, "utf8")
+  .split("\n")
+  .find((line) => line.includes("\t3\tsignal\t"));
+if (!latest) throw new Error("latest keyed wake was not recorded");
+writeFileSync(`${process.env.FM_HOME}/state/.wake-queue`, `${latest}\n`);
+await handlers.get("agent_settled")?.({}, {});
+await waitFor(() => piQueue.length === 2, "latest live wake was not delivered after settlement");
+if (piQueue[0] !== "captain follow-up") throw new Error(`captain follow-up was cleared: ${piQueue.join(" | ")}`);
+if (!piQueue[1].includes("cycle three") || piQueue[1].includes("cycle two")) {
+  throw new Error(`superseded wake was delivered instead of the latest cycle: ${piQueue[1]}`);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "Pi busy wake delivery must late-validate exact durable cycles without clearing captain follow-ups"
+  [ -z "$out" ] || fail "Pi keyed-wake test printed output: $out"
+  pass "Pi busy wakes are late-validated by durable cycle and superseded without clearing captain follow-ups"
+}
+
 test_pi_hung_successor_falls_back_to_typed_wake() {
   local repo home plugin log out status
   repo="$TMP_ROOT/pi-hung-successor-root"
@@ -2129,6 +2242,7 @@ test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
 test_pi_actionable_close_starts_single_successor_before_delivery
+test_pi_busy_wakes_are_late_validated_and_superseded
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry
 test_pi_late_unretired_close_resumes_supervision

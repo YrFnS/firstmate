@@ -348,6 +348,35 @@ test_lock_empty_pid_uses_minimum_grace() {
   pass "empty mid-acquire lock keeps a minimum grace"
 }
 
+test_lock_create_failure_does_not_recurse() {
+  local dir state vanished out pid waited=0 status=0
+  dir=$(make_case lock-create-failure)
+  state="$dir/state"
+  vanished="$dir/vanished"
+  mkdir "$vanished"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    rmdir "$2"
+    if fm_lock_try_acquire "$2/.contend.lock"; then rc=0; else rc=$?; fi
+    printf "rc=%s\n" "$rc"
+  ' _ "$LIB" "$vanished" > "$dir/out" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 100 ]; do
+    sleep 0.01
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "an absent lock path recursed instead of returning its create failure"
+  fi
+  wait "$pid" || status=$?
+  out=$(cat "$dir/out")
+  [ "$status" -eq 0 ] || fail "create-failure probe crashed or failed (rc=$status): $out"
+  [ "$out" = "rc=1" ] || fail "create-failure probe returned an unexpected result: $out"
+  pass "an absent lock path returns its create failure without recursive stale stealing"
+}
+
 test_lock_late_claim_loses_after_recreate() {
   local dir state lockdir out
   dir=$(make_case lock-late-claim)
@@ -1045,6 +1074,7 @@ test_lock_stale_steal_single_winner_under_concurrency
 test_lock_live_steal_mutex_is_not_reclaimed
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
+test_lock_create_failure_does_not_recurse
 test_lock_late_claim_loses_after_recreate
 test_lock_paused_mid_acquire_claim_fails_during_steal
 test_watch_restart_rejects_reused_pid

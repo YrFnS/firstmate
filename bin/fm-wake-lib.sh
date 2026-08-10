@@ -387,6 +387,12 @@ fm_lock_try_acquire() {
   if fm_lock_try_create "$lockdir"; then
     return 0
   fi
+  # A failed create with no lock to contend on is an I/O/path failure, not a
+  # stale owner. Recursing through .steal suffixes here can exhaust Bash when a
+  # lock's parent disappears while a detached worker is still settling.
+  if [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ]; then
+    return 1
+  fi
 
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
   if fm_pid_alive "$pid"; then

@@ -46,6 +46,18 @@ type WatchToolRenderContext = {
   isPartial: boolean;
 };
 
+type WakeQueueToken = {
+  seq: string;
+  kind: string;
+  key: string;
+};
+
+type DeferredWake = {
+  cycle: number;
+  message: string;
+  tokens: WakeQueueToken[] | null;
+};
+
 type SessionGeneration = {
   id: number;
   stopping: boolean;
@@ -54,6 +66,8 @@ type SessionGeneration = {
   retryFailures: number;
   restoring: boolean;
   seq: number;
+  latestActionableCycle: number;
+  pendingWake: DeferredWake | null;
 };
 
 function refreshWatchToolShell(
@@ -193,6 +207,8 @@ function createGeneration(): SessionGeneration {
     retryFailures: 0,
     restoring: false,
     seq: 0,
+    latestActionableCycle: 0,
+    pendingWake: null,
   };
 }
 
@@ -208,6 +224,7 @@ function stopGeneration(generation: SessionGeneration): void {
   generation.stopping = true;
   if (generation.retryTimer) clearTimeout(generation.retryTimer);
   generation.retryTimer = null;
+  generation.pendingWake = null;
   if (generation.child) generation.child.kill("SIGTERM");
   generation.child = null;
 }
@@ -219,6 +236,7 @@ process.once("exit", cleanupOnProcessExit);
 
 export default function (pi: ExtensionAPI) {
   let generation = createGeneration();
+  let agentActive = false;
   activateGeneration(generation);
 
   let calmPresentation: CalmPresentationState = {
@@ -237,6 +255,38 @@ export default function (pi: ExtensionAPI) {
     !calmPresentation.stockExportRendering &&
     !calmTranscriptClassIsVisible(itemClass);
 
+  function wakeQueueRows(): string[][] | null {
+    try {
+      return readFileSync(`${state}/.wake-queue`, "utf8")
+        .split(/\r?\n/)
+        .map((line: string) => line.split("\t"))
+        .filter((fields: string[]) => fields.length >= 5);
+    } catch {
+      return null;
+    }
+  }
+
+  function wakeQueueTokens(message: string): WakeQueueToken[] | null {
+    const rows = wakeQueueRows();
+    if (rows === null) return null;
+    const tokens: WakeQueueToken[] = [];
+    for (const fields of rows) {
+      if (fields.slice(4).join("\t") === message) {
+        tokens.push({ seq: fields[1], kind: fields[2], key: fields[3] });
+      }
+    }
+    return tokens;
+  }
+
+  function deferredWakeIsQueued(wake: DeferredWake): boolean {
+    if (wake.tokens === null) return true;
+    if (wake.tokens.length === 0) return false;
+    const rows = wakeQueueRows();
+    if (rows === null) return true;
+    const keys = new Set(rows.map((fields) => `${fields[1]}\t${fields[2]}\t${fields[3]}`));
+    return wake.tokens.some((token) => keys.has(`${token.seq}\t${token.kind}\t${token.key}`));
+  }
+
   async function sendWake(owner: SessionGeneration, message: string): Promise<void> {
     if (!generationIsLive(owner)) return;
     const content = encodeFirstmateOperationalInput(
@@ -244,6 +294,28 @@ export default function (pi: ExtensionAPI) {
       `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
     );
     await pi.sendUserMessage(content, { deliverAs: "followUp" });
+  }
+
+  async function flushDeferredWake(owner: SessionGeneration): Promise<void> {
+    const wake = owner.pendingWake;
+    owner.pendingWake = null;
+    if (!wake || !generationIsLive(owner) || wake.cycle !== owner.latestActionableCycle) return;
+    if (!deferredWakeIsQueued(wake)) return;
+    await sendWake(owner, wake.message);
+  }
+
+  async function deliverActionableWake(
+    owner: SessionGeneration,
+    wake: DeferredWake,
+    busyAtClose: boolean,
+  ): Promise<void> {
+    if (!generationIsLive(owner) || wake.cycle !== owner.latestActionableCycle) return;
+    if (!busyAtClose) {
+      await sendWake(owner, wake.message);
+      return;
+    }
+    owner.pendingWake = wake;
+    if (!agentActive) await flushDeferredWake(owner);
   }
 
   function surfaceFailure(owner: SessionGeneration, message: string): void {
@@ -422,6 +494,9 @@ export default function (pi: ExtensionAPI) {
       const classification = classifyClose(stdout, stderr, code, signal);
       const predecessor = String(armChild.pid ?? "");
       if (classification.kind === "actionable") {
+        const busyAtClose = agentActive;
+        const tokens = busyAtClose ? wakeQueueTokens(classification.message) : null;
+        owner.latestActionableCycle = id;
         owner.retryFailures = 0;
         owner.restoring = true;
         void (async () => {
@@ -429,7 +504,7 @@ export default function (pi: ExtensionAPI) {
           if (generationIsLive(owner)) owner.restoring = false;
           if (!generationIsLive(owner)) return;
           const message = failure ? `${classification.message}\n\n${failure}` : classification.message;
-          await sendWake(owner, message);
+          await deliverActionableWake(owner, { cycle: id, message, tokens }, busyAtClose);
         })().catch(() => {
         });
         return;
@@ -453,12 +528,21 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  pi.on?.("agent_start", () => {
+    agentActive = true;
+  });
+  pi.on?.("agent_settled", async () => {
+    agentActive = false;
+    await flushDeferredWake(generation);
+  });
   pi.on?.("session_start", () => {
     if (generation.stopping) generation = createGeneration();
+    agentActive = false;
     activateGeneration(generation);
     markLoaded();
   });
   pi.on?.("session_shutdown", () => {
+    agentActive = false;
     stopGeneration(generation);
   });
 
