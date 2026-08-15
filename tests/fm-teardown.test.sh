@@ -1412,9 +1412,11 @@ case "\${1:-} \${2:-}" in
   "session list") printf '%s\n' '{"sessions":[{"name":"default","running":true,"socket_path":"$case_dir/herdr.sock"}]}' ;;
   "status --json") printf '%s\n' '{"server":{"running":true}}' ;;
   "pane close") rm -f "\$state" ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wG","label":"firstmate"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"wG:tQ","workspace_id":"wG","label":"fm-task-x1"}}}' ;;
   "pane get")
     if [ -f "\$state" ]; then
-      printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ"}}}'
+      printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ","tab_id":"wG:tQ","workspace_id":"wG"}}}'
     else
       printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
       exit 1
@@ -1488,6 +1490,9 @@ case "\${1:-} \${2:-}" in
       exit 1
     fi
     printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ","tab_id":"wG:tQ","workspace_id":"wG"}}}'
+    ;;
+  "tab get")
+    printf '%s\n' '{"result":{"tab":{"tab_id":"wG:tQ","workspace_id":"wG","label":"fm-task-x1"}}}'
     ;;
   "agent get")
     printf '%s\n' '{"error":{"code":"agent_not_found"}}' >&2
@@ -1693,7 +1698,8 @@ case "\${1:-} \${2:-}" in
       printf '%s\n' '{"sessions":[{"name":"childsession","running":true,"socket_path":"$case_dir/child.sock"}]}'
     fi
     ;;
-  "workspace list") exit 1 ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wC","label":"firstmate"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"wC:t1","workspace_id":"wC","label":"fm-child-herdr"}}}' ;;
   "pane get")
     if [ -e "\${FM_FAKE_HERDR_CLOSED:?}" ]; then
       if [ "\${FM_FAKE_HERDR_PRESENCE_UNKNOWN:-0}" = 1 ]; then
@@ -1893,7 +1899,8 @@ case "\${1:-} \${2:-}" in
   "session list")
     printf '%s\n' '{"sessions":[{"name":"grandchildsession","running":true,"socket_path":"$case_dir/grandchild.sock"}]}'
     ;;
-  "workspace list") exit 1 ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wG","label":"firstmate"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"wG:t1","workspace_id":"wG","label":"fm-grandchild-herdr"}}}' ;;
   "pane get")
     if [ -e "\${FM_FAKE_HERDR_CLOSED:?}" ]; then
       printf '%s\n' 'not-json'
@@ -1993,7 +2000,10 @@ case "${1:-} ${2:-}" in
     printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"}}}'
     ;;
   "tab get")
-    printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2"}}}'
+    case "${3:-}" in
+      w1:t2) printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t2","workspace_id":"w1","label":"fm-task-x1"}}}' ;;
+      *) printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2"}}}' ;;
+    esac
     ;;
   "tab focus")
     [ "${FM_FAKE_HERDR_RESTORE_FAIL:-0}" != 1 ] || exit 1

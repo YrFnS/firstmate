@@ -252,9 +252,9 @@ done
 
 # shellcheck source=bin/fm-host-root-lib.sh
 . "$SCRIPT_DIR/fm-host-root-lib.sh"
-# Host mode must be validated before the bounded child, lock acquisition, or
-# any bootstrap mutation so its preflight exit remains observable to the hook.
-fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
+# Host ownership must be validated before the bounded child, lock acquisition,
+# or any bootstrap mutation so its preflight exit remains observable to the hook.
+fm_host_root_assert_session_authority "$FM_ROOT" "$STATE" || exit $?
 
 # --- 0. runtime bound ---------------------------------------------------------
 # The ordered stage list is the contract behind the truncation banner: the child

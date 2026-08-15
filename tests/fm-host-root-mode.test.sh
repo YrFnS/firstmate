@@ -185,6 +185,44 @@ SH
   pass "host cwd mismatch is rejected before session, brief, or spawn mutation"
 }
 
+test_unset_session_cannot_take_over_host_owned_home() {
+  local host="$TMP/unset-session-host" other="$TMP/other-session-host" home="$TMP/unset-session-home" meta out status=0 before after
+  make_host "$host"
+  mkdir -p "$home/state" "$home/data" "$home/config"
+  meta="$home/state/host-owned.meta"
+  fm_write_meta "$meta" \
+    "window=@1" "endpoint_task_id=host-owned" "worktree=$TMP/host-owned-worktree" \
+    "project=$TMP/host-owned-project" "kind=ship" "host_root=$host" \
+    "tmux_window_marker=host-owned-marker" "tmux_socket_path=/tmp/host-owned.sock"
+  before=$(find "$home" -mindepth 1 -print | sort)
+
+  out=$(cd "$host" && FM_HOME="$home" FM_HOST_ROOT="$host" bash -c \
+    '. "$1"; fm_host_root_assert_session_authority "$2" "$3"' _ "$LIB" "$ROOT" "$home/state" 2>&1) || status=$?
+  expect_code 0 "$status" "the recorded host owner should retain session authority"
+  [ -z "$out" ] || fail "matching host session authority emitted unexpected output: $out"
+
+  out=$(cd "$ROOT" && env -u FM_HOST_ROOT FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    "$ROOT/bin/fm-session-start.sh" 2>&1) || status=$?
+  expect_code 2 "$status" "unset session must not take over a host-owned home"
+  assert_contains "$out" 'FM_HOST_ROOT is unset' "unset takeover refusal did not identify missing host authority"
+  assert_contains "$out" "$host" "unset takeover refusal omitted the recorded host root"
+  after=$(find "$home" -mindepth 1 -print | sort)
+  [ "$before" = "$after" ] || fail "unset session mutated a host-owned home before refusal"
+  assert_absent "$home/state/.lock" "unset session acquired the host-owned session lock"
+
+  make_host "$other"
+  status=0
+  out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$other" \
+    "$ROOT/bin/fm-session-start.sh" 2>&1) || status=$?
+  expect_code 2 "$status" "another host root must not take over a host-owned home"
+  assert_contains "$out" 'does not match task metadata' \
+    "cross-host takeover refusal did not identify the recorded ownership mismatch"
+  after=$(find "$home" -mindepth 1 -print | sort)
+  [ "$before" = "$after" ] || fail "another host root mutated the host-owned home before refusal"
+  assert_absent "$home/state/.lock" "another host root acquired the host-owned session lock"
+  pass "unset or mismatched FM_HOST_ROOT cannot take over a home with host-owned tasks"
+}
+
 test_host_command_rendering() {
   local host="$TMP/render & host" home="$TMP/render-home" fake_root="$TMP/FirstMate & root's copy" rendered supervision command argv harness
   make_host "$host"; mkdir -p "$home/state" "$home/config" "$fake_root/bin"
@@ -726,6 +764,12 @@ test_mutators_require_host_cwd() {
   expect_code 2 "$status" "fm-send must reject a host cwd mismatch"
   assert_contains "$out" 'requires the recorded host root cwd' "fm-send host mismatch was not explicit"
   status=0
+  out=$(cd "$other" && PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
+    FM_TMUX_LOG="$log" FM_CURRENT_PATH="$current" "$ROOT/bin/fm-control.sh" lane interrupt 2>&1) || status=$?
+  expect_code 2 "$status" "fm-control must reject a host cwd mismatch"
+  assert_contains "$out" 'requires the recorded host root cwd' "fm-control host mismatch was not explicit"
+  [ ! -s "$log" ] || fail "fm-control inspected or signaled an endpoint before host validation"
+  status=0
   out=$(cd "$other" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-teardown.sh" lane 2>&1) || status=$?
   expect_code 2 "$status" "fm-teardown must reject a host cwd mismatch"
   assert_present "$home/state/lane.meta" "teardown mutated task state before host validation"
@@ -1021,7 +1065,7 @@ SH
   current="$TMP/decision.current"
   log="$TMP/decision.log"
   tree_log="$TMP/decision-treehouse.log"
-  for action in hold complete resolve; do
+  for action in hold complete resolve decline repair; do
     action_id="decision-post-teardown-$action"
     mkdir -p "$home/data/$action_id"
 printf 'window=test-session:fm-%s\nendpoint_task_id=%s\nworktree=/tmp/decision-target\nhost_root=%s\nproject=/tmp/project\nkind=ship\nmode=local-only\ntmux_window_marker=decision-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
@@ -1054,6 +1098,11 @@ printf 'window=test-session:fm-%s\nendpoint_task_id=%s\nworktree=/tmp/decision-t
         out=$(cd "$wrong" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
           "$ROOT/bin/fm-decision-hold.sh" resolve "$action_id" choice \
             --decision-file "$TMP/missing-decision" --routed-to routed-task 2>&1) || status=$?
+        ;;
+      decline|repair)
+        out=$(cd "$wrong" && env -u FM_HOST_ROOT PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+          "$ROOT/bin/fm-decision-hold.sh" "$action" "$action_id" choice \
+            --decision-file "$TMP/missing-decision" 2>&1) || status=$?
         ;;
     esac
     expect_code 2 "$status" "first post-teardown $action action trusted a non-host cwd"
@@ -1454,6 +1503,7 @@ test_resolution_and_validation
 test_ambiguous_host_owner_is_rejected
 test_host_owner_publication_is_atomic
 test_session_cwd_mismatch_precedes_mutation
+test_unset_session_cannot_take_over_host_owned_home
 test_host_command_rendering
 test_brief_variants
 test_host_local_only_rejected_before_mutation

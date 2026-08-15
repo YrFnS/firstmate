@@ -1326,7 +1326,39 @@ test_stop_and_verify_requires_confirmed_absence() {
   ' _ "$ROOT" 2>&1) || status=$?
   expect_code 0 "$status" "a confirmed absent endpoint should permit cleanup"
   [ -z "$out" ] || fail "confirmed absence emitted unexpected output: $out"
-  pass "fm_backend_stop_and_verify distinguishes confirmed absence from an unreadable backend"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_source() { return 0; }
+    fm_backend_herdr_parse_target() {
+      FM_BACKEND_HERDR_SESSION=lab
+      FM_BACKEND_HERDR_PANE=w1:p2
+    }
+    fm_backend_herdr_task_binding_state() { printf mismatch; }
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify herdr lab:w1:p2 w1:t2 fm-task 0 "" "" w1
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 1 "$status" "Herdr stop must reject a reused pane id"
+  assert_contains "$out" 'no longer matches its recorded workspace, tab, and task label' \
+    "Herdr reused-pane refusal did not explain the ownership mismatch"
+  assert_not_contains "$out" called "Herdr reused-pane refusal invoked a backend kill"
+
+  status=0
+  out=$(bash -c '
+    . "$1/bin/fm-backend.sh"
+    fm_backend_source() { return 0; }
+    fm_backend_herdr_parse_target() {
+      FM_BACKEND_HERDR_SESSION=lab
+      FM_BACKEND_HERDR_PANE=w1:p2
+    }
+    fm_backend_herdr_task_binding_state() { printf dead; }
+    fm_backend_kill() { printf called; }
+    fm_backend_stop_and_verify herdr lab:w1:p2 w1:t2 fm-task 0 "" "" w1
+  ' _ "$ROOT" 2>&1) || status=$?
+  expect_code 0 "$status" "an already-absent Herdr pane should be idempotent success"
+  [ -z "$out" ] || fail "an absent Herdr pane invoked cleanup: $out"
+  pass "fm_backend_stop_and_verify distinguishes confirmed absence and exact Herdr task ownership"
 }
 
 # --- backend selection loudly refuses an unknown backend --------------------

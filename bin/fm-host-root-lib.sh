@@ -9,6 +9,7 @@
 # fm_host_root_enabled
 # fm_host_root_resolve <fm-root>       # prints the physical host root
 # fm_host_root_assert_session_cwd <fm-root>
+# fm_host_root_assert_session_authority <fm-root> <state-dir>
 # fm_host_root_assert_task_cwd <fm-root> <task-meta>
 # fm_host_root_persist_task_owner <task-meta> <owner-file>
 # fm_host_root_paths_overlap <physical-host-root> <physical-target-root>
@@ -69,6 +70,30 @@ fm_host_root_assert_session_cwd() {
     echo "error: host-root mode requires the supervisor cwd to be $host (current physical cwd: $cwd)" >&2
     return 2
   }
+}
+
+fm_host_root_assert_session_authority() {  # <fm-root> <state-dir>
+  local fm_root=$1 state=$2 meta owner status ambient=
+  if fm_host_root_enabled; then
+    fm_host_root_assert_session_cwd "$fm_root" || return $?
+    ambient=$(fm_host_root_resolve "$fm_root") || return $?
+  fi
+  for meta in "$state"/*.meta; do
+    [ -e "$meta" ] || [ -L "$meta" ] || continue
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    if owner=$(fm_host_root_recorded_owner "$meta"); then
+      if [ -n "$ambient" ] && [ "$owner" = "$ambient" ]; then
+        continue
+      elif [ -z "$ambient" ]; then
+        echo "error: FM_HOST_ROOT is unset, but task metadata $(basename "$meta") is owned by host root $owner; start from that directory with FM_HOST_ROOT set" >&2
+      else
+        echo "error: FM_HOST_ROOT $ambient does not match task metadata $(basename "$meta") owned by host root $owner" >&2
+      fi
+      return 2
+    fi
+    status=$?
+    [ "$status" -eq 1 ] || return "$status"
+  done
 }
 
 fm_host_root_recorded_owner() {

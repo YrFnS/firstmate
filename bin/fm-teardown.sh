@@ -2121,6 +2121,7 @@ teardown_herdr_require_prerequisites() {  # <task-id>
     fm_backend_herdr_parse_target \
     fm_backend_herdr_pane_presence_state \
     fm_backend_herdr_workspace_presence_state \
+    fm_backend_herdr_task_binding_state \
     fm_backend_herdr_endpoint_confirmed_gone \
     fm_backend_herdr_explicit_close_pane_confirmed \
     fm_backend_herdr_kill_serialized \
@@ -2199,6 +2200,29 @@ $session	$lock_path"
   return 1
 }
 
+TEARDOWN_HERDR_BINDING_STATE=
+teardown_herdr_assert_task_binding() {  # <target> <task-id> <meta-file>
+  local target=$1 task_id=$2 meta=$3 workspace tab state
+  TEARDOWN_HERDR_BINDING_STATE=
+  fm_backend_herdr_parse_target "$target" || return 1
+  workspace=$(meta_value "$meta" herdr_workspace_id)
+  tab=$(meta_value "$meta" herdr_tab_id)
+  state=$(fm_backend_herdr_task_binding_state \
+    "$FM_BACKEND_HERDR_SESSION" "$workspace" "$tab" \
+    "$FM_BACKEND_HERDR_PANE" "fm-$task_id")
+  TEARDOWN_HERDR_BINDING_STATE=$state
+  case "$state" in
+    dead|match) return 0 ;;
+    mismatch)
+      echo "error: herdr endpoint $target for $task_id no longer matches its recorded workspace, tab, and task label; nothing was changed" >&2
+      ;;
+    *)
+      echo "error: herdr endpoint $target for $task_id has unreadable task ownership; nothing was changed" >&2
+      ;;
+  esac
+  return 1
+}
+
 preflight_firstmate_home_herdr_children() {  # <home>
   local home=$1 sub_state child_meta child_id child_backend child_target child_kind child_home child_wt
   sub_state="$home/state"
@@ -2229,7 +2253,7 @@ preflight_firstmate_home_herdr_children() {  # <home>
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_host_mode child_host_root child_orca_worktree_id child_return_rc child_busy_gen
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_host_mode child_host_root child_orca_worktree_id child_return_rc child_busy_gen child_binding
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -2265,7 +2289,17 @@ cleanup_firstmate_home_children() {
         echo "error: herdr session presentation lock is not held for child $child_id; retaining that child's durable identity records and stopping forced cleanup" >&2
         return 1
       fi
-      fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true
+      child_binding=$(fm_backend_herdr_task_binding_state \
+        "$FM_BACKEND_HERDR_SESSION" "$(meta_value "$child_meta" herdr_workspace_id)" \
+        "$(meta_value "$child_meta" herdr_tab_id)" "$FM_BACKEND_HERDR_PANE" "fm-$child_id")
+      case "$child_binding" in
+        dead) ;;
+        match) fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true ;;
+        *)
+          echo "error: herdr endpoint $child_t for child $child_id does not have confirmed task ownership; retaining that child's durable identity records and stopping forced cleanup" >&2
+          return 1
+          ;;
+      esac
       if ! fm_backend_herdr_endpoint_confirmed_gone "$child_t"; then
         echo "error: herdr pane $child_t for child $child_id is not confirmed gone; retaining that child's durable identity records and stopping forced cleanup" >&2
         return 1
@@ -2365,6 +2399,7 @@ if [ "$KIND" = secondmate ]; then
     validate_firstmate_home_children_removal "$HOME_PATH" || exit 1
     if [ "$BACKEND" = herdr ]; then
       teardown_herdr_preflight_target "$T" "$ID" || exit 1
+      teardown_herdr_assert_task_binding "$T" "$ID" "$META" || exit 1
     fi
     preflight_firstmate_home_herdr_children "$HOME_PATH" || exit 1
   fi
@@ -2460,6 +2495,18 @@ if [ "$BACKEND" = herdr ] \
   fi
 fi
 
+# Bind a live Herdr pane back to its recorded workspace, tab, and task label
+# under the named-session lock before any process, endpoint, or worktree cleanup.
+TEARDOWN_HERDR_SESSION=
+TEARDOWN_HERDR_PANE=
+if [ "$BACKEND" = herdr ]; then
+  teardown_herdr_preflight_target "$T" "$ID" || exit 1
+  teardown_herdr_assert_task_binding "$T" "$ID" "$META" || exit 1
+  fm_backend_herdr_parse_target "$T" || exit 1
+  TEARDOWN_HERDR_SESSION=$FM_BACKEND_HERDR_SESSION
+  TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
+fi
+
 # Every landed/discard-work refusal above has now passed (or --force skipped
 # them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
 # --force, and before ANY destructive step below - a still-parked run or a
@@ -2476,22 +2523,6 @@ fi
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
 
-# A Herdr close may reposition shared workspace order, so the whole
-# destructive sequence below (pane close, worktree return, record removal)
-# runs under the named-session presentation lock, acquired BEFORE anything is
-# returned or erased: a contended lock refuses here while the isolated copy,
-# every durable record, and the endpoint are all still intact for a plain
-# rerun. An unresolvable lock path (for example an unreachable server) also
-# refuses before any destructive step.
-TEARDOWN_HERDR_SESSION=
-TEARDOWN_HERDR_PANE=
-if [ "$BACKEND" = herdr ]; then
-  teardown_herdr_preflight_target "$T" "$ID" || exit 1
-  fm_backend_herdr_parse_target "$T" || exit 1
-  TEARDOWN_HERDR_SESSION=$FM_BACKEND_HERDR_SESSION
-  TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
-fi
-
 stop_task_endpoint_and_verify() {
   local close_status=0 endpoint_state
   if [ "$BACKEND" != herdr ]; then
@@ -2503,6 +2534,8 @@ stop_task_endpoint_and_verify() {
     echo "error: herdr session presentation lock is not held for $ID; retaining every durable task record" >&2
     return 1
   fi
+  teardown_herdr_assert_task_binding "$T" "$ID" "$META" || return 1
+  [ "$TEARDOWN_HERDR_BINDING_STATE" != dead ] || return 0
   if [ "$HERDR_PRESENTATION_JOURNAL_PRESENT" != 1 ]; then
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
     if fm_backend_herdr_endpoint_confirmed_gone "$T"; then
@@ -2525,6 +2558,10 @@ stop_task_endpoint_and_verify() {
   fm_backend_herdr_projection_close_pane_focus_preserving \
     "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" || close_status=$?
   if [ "$close_status" -ne 0 ]; then
+    if [ "$TASK_HOST_MODE" -eq 0 ] && fm_backend_herdr_endpoint_confirmed_gone "$T"; then
+      [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] || rm -f "$HERDR_PRESENTATION_JOURNAL"
+      return 0
+    fi
     echo "error: exact herdr task-pane close could not be confirmed absent; pane is not confirmed gone; refusing destructive cleanup" >&2
     return 1
   fi
@@ -2540,7 +2577,7 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   validate_worktree_teardown_safety_with_lock_cleanup || exit 1
 fi
 
-if [ "$TASK_HOST_MODE" -eq 1 ]; then
+if [ "$TASK_HOST_MODE" -eq 1 ] || [ "$BACKEND" = herdr ]; then
   if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ] && [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
     ORCA_PATH_MATCH_VERIFIED=1
@@ -2554,7 +2591,7 @@ if [ "$TASK_HOST_MODE" -eq 1 ]; then
   fi
 fi
 
-# Host-root tasks reach this point with the worker confirmed stopped.
+# Host-root and Herdr tasks reach this point with the worker confirmed stopped.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
     require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
@@ -2600,16 +2637,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
 fi
 
 if [ "$TASK_HOST_MODE" -eq 0 ]; then
-  if [ "$BACKEND" = herdr ]; then
-    if ! teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
-      echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
-    elif [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-      fm_backend_herdr_projection_close_pane_focus_preserving \
-        "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" 2>/dev/null || true
-    else
-      fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
-    fi
-  elif [ "$BACKEND" != orca ]; then
+  if [ "$BACKEND" != herdr ] && [ "$BACKEND" != orca ]; then
     fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fi
   if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then

@@ -8,10 +8,8 @@ command -v npm >/dev/null 2>&1 || {
 	echo "skip: npm not found for Pi extension typecheck"
 	exit 0
 }
-command -v tsc >/dev/null 2>&1 || {
-	echo "skip: tsc not found for Pi extension typecheck"
-	exit 0
-}
+HAS_TSC=1
+command -v tsc >/dev/null 2>&1 || HAS_TSC=0
 
 PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g)/@earendil-works/pi-coding-agent"}
 if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
@@ -44,6 +42,8 @@ cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$TMP_ROOT/lib/fm-operatio
 ln -s "$PI_PACKAGE_DIR" "$TMP_ROOT/node_modules/@earendil-works/pi-coding-agent"
 ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$TMP_ROOT/node_modules/@earendil-works/pi-tui"
 ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$TMP_ROOT/node_modules/typebox"
+ln -s "$PI_PACKAGE_DIR/node_modules/marked" "$TMP_ROOT/node_modules/marked"
+ln -s "$PI_PACKAGE_DIR/node_modules/get-east-asian-width" "$TMP_ROOT/node_modules/get-east-asian-width"
 ln -s "$PI_PACKAGE_DIR/node_modules/@types/node" "$TMP_ROOT/node_modules/@types/node"
 
 cat >"$TMP_ROOT/package.json" <<'JSON'
@@ -65,6 +65,31 @@ cat >"$TMP_ROOT/tsconfig.json" <<'JSON'
 }
 JSON
 
-tsc -p "$TMP_ROOT/tsconfig.json" || exit 1
+if [ "$HAS_TSC" -eq 1 ]; then
+  tsc -p "$TMP_ROOT/tsconfig.json" || exit 1
+else
+  echo "skip: tsc not found for Pi extension typecheck"
+fi
+FM_TARGET_WORKTREE="$ROOT" EXT="$TMP_ROOT/fm-primary-pi-watch.ts" \
+  node --input-type=module <<'JS' || exit 1
+import { pathToFileURL } from "node:url";
+
+const registrations = [];
+const pi = {
+  events: { on: (...args) => registrations.push(["events", ...args]) },
+  on: (...args) => registrations.push(["on", ...args]),
+  registerCommand: (...args) => registrations.push(["command", ...args]),
+  registerTool: (...args) => registrations.push(["tool", ...args]),
+};
+const extension = await import(`${pathToFileURL(process.env.EXT).href}?target-worker=${Date.now()}`);
+extension.default(pi);
+if (registrations.length !== 0) {
+  throw new Error(`target worker activated ${registrations.length} Pi watch registrations`);
+}
+JS
 version=$(jq -r '.version' "$PI_PACKAGE_DIR/package.json" 2>/dev/null || printf 'unknown')
-printf 'ok - tracked Pi extensions pass strict no-emit typecheck against Pi %s\n' "$version"
+if [ "$HAS_TSC" -eq 1 ]; then
+  printf 'ok - tracked Pi extensions typecheck and target workers leave primary watch supervision inert against Pi %s\n' "$version"
+else
+  printf 'ok - target workers leave primary Pi watch supervision inert against Pi %s\n' "$version"
+fi

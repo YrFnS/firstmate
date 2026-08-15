@@ -1873,6 +1873,64 @@ fm_backend_herdr_workspace_presence_state() {  # <session> <workspace_id>
   esac
 }
 
+# Verify that a present pane still belongs to the exact workspace/tab/task
+# recorded at creation. Herdr IDs can be reused after a named session is
+# recreated, so pane presence alone is never cleanup authority.
+fm_backend_herdr_task_binding_state() {  # <session> <workspace> <tab> <pane> <task-label>
+  local session=$1 workspace=$2 tab=$3 pane=$4 task_label=$5 pane_out tab_out spaces code matches
+  [ -n "$session" ] && [ -n "$workspace" ] && [ -n "$tab" ] \
+    && [ -n "$pane" ] && [ -n "$task_label" ] || { printf 'unknown'; return 0; }
+
+  pane_out=$(fm_backend_herdr_cli "$session" pane get "$pane" 2>&1)
+  code=$(printf '%s' "$pane_out" | jq -r '.error.code // empty' 2>/dev/null)
+  if [ -n "$code" ]; then
+    [ "$code" = pane_not_found ] && printf 'dead' || printf 'unknown'
+    return 0
+  fi
+  if ! printf '%s' "$pane_out" | jq -e --arg pane "$pane" --arg tab "$tab" --arg workspace "$workspace" '
+    .result.pane.pane_id == $pane
+    and .result.pane.tab_id == $tab
+    and .result.pane.workspace_id == $workspace
+  ' >/dev/null 2>&1; then
+    if printf '%s' "$pane_out" | jq -e '.result.pane | type == "object"' >/dev/null 2>&1; then
+      printf 'mismatch'
+    else
+      printf 'unknown'
+    fi
+    return 0
+  fi
+
+  tab_out=$(fm_backend_herdr_cli "$session" tab get "$tab" 2>&1)
+  code=$(printf '%s' "$tab_out" | jq -r '.error.code // empty' 2>/dev/null)
+  if [ -n "$code" ]; then
+    case "$code" in tab_not_found) printf 'mismatch' ;; *) printf 'unknown' ;; esac
+    return 0
+  fi
+  if ! printf '%s' "$tab_out" | jq -e --arg tab "$tab" --arg workspace "$workspace" --arg label "$task_label" '
+    .result.tab.tab_id == $tab
+    and .result.tab.workspace_id == $workspace
+    and .result.tab.label == $label
+  ' >/dev/null 2>&1; then
+    if printf '%s' "$tab_out" | jq -e '.result.tab | type == "object"' >/dev/null 2>&1; then
+      printf 'mismatch'
+    else
+      printf 'unknown'
+    fi
+    return 0
+  fi
+
+  spaces=$(fm_backend_herdr_cli "$session" workspace list 2>&1)
+  matches=$(printf '%s' "$spaces" | jq -r --arg workspace "$workspace" '
+    select((.result.workspaces | type) == "array")
+    | [.result.workspaces[] | select(.workspace_id == $workspace)] | length
+  ' 2>/dev/null) || matches=
+  case "$matches" in
+    1) printf 'match' ;;
+    0|[2-9]|[1-9][0-9]*) printf 'mismatch' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
 # fm_backend_herdr_explicit_close_pane_confirmed: issue one explicit close and
 # succeed only when a structured follow-up proves the exact pane is gone.
 fm_backend_herdr_explicit_close_pane_confirmed() {  # <session> <pane_id>
@@ -2566,45 +2624,56 @@ fm_backend_herdr_target_ready() {  # <target>
 # `treehouse get`. In that platform-specific shape, try marked PowerShell and
 # cmd.exe cwd probes and read the last complete path block from the pane.
 fm_backend_herdr_current_path() {  # <target>
-  local path out line probe marker_begin="__FM_HERDR_CWD_BEGIN__" marker_end="__FM_HERDR_CWD_END__" in_block=0 chunk="" last=""
+  local path out line probe marker_begin marker_end in_block chunk last="" nonce
+  local probe_index=0 attempt attempts=${FM_BACKEND_HERDR_CWD_PROBE_ATTEMPTS:-10}
+  local delay=${FM_BACKEND_HERDR_CWD_PROBE_DELAY:-0.1}
+  case "$attempts" in ''|*[!0-9]*|0) attempts=10 ;; esac
   fm_backend_herdr_target_ready "$1" || return 0
   path=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
     | jq -r '.result.pane | (.foreground_cwd // (.cwd | strings | select(test("^[A-Za-z]:[\\\\/]")))) // empty' 2>/dev/null)
   case "$path" in
     [A-Za-z]:[\\/]*)
-      for probe in \
-        "echo $marker_begin; pwd; echo $marker_end" \
-        "echo $marker_begin & cd & echo $marker_end"; do
+      for probe in powershell cmd; do
+        probe_index=$((probe_index + 1))
+        nonce="${BASHPID:-$$}_${RANDOM:-0}_${probe_index}"
+        marker_begin="__FM_HERDR_CWD_BEGIN_${nonce}__"
+        marker_end="__FM_HERDR_CWD_END_${nonce}__"
+        case "$probe" in
+          powershell) probe="echo $marker_begin; pwd; echo $marker_end" ;;
+          cmd) probe="echo $marker_begin & cd & echo $marker_end" ;;
+        esac
         fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" \
           "$probe" >/dev/null 2>&1 || return 0
-        sleep "${FM_BACKEND_HERDR_CWD_PROBE_DELAY:-0.3}"
-        out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" \
-          --source recent --lines 200 2>/dev/null) || return 0
-        in_block=0
-        chunk=""
-        while IFS= read -r line; do
-          line=${line%$'\r'}
-          if [ "$line" = "$marker_begin" ]; then
-            in_block=1
-            chunk=""
-            continue
-          fi
-          if [ "$line" = "$marker_end" ]; then
-            case "$chunk" in /*|[A-Za-z]:[\\/]*) last=$chunk ;; esac
-            in_block=0
-            continue
-          fi
-          [ "$in_block" -eq 1 ] || continue
-          case "$line" in ''|Path|---*) continue ;; esac
-          if [ -n "$chunk" ]; then
-            chunk="$chunk$line"
-          else
-            case "$line" in /*|[A-Za-z]:[\\/]*) chunk=$line ;; esac
-          fi
-        done <<EOF
+        for ((attempt = 0; attempt < attempts; attempt += 1)); do
+          out=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane read "$FM_BACKEND_HERDR_PANE" \
+            --source recent --lines 200 2>/dev/null) || return 0
+          in_block=0
+          chunk=""
+          while IFS= read -r line; do
+            line=${line%$'\r'}
+            if [ "$line" = "$marker_begin" ]; then
+              in_block=1
+              chunk=""
+              continue
+            fi
+            if [ "$line" = "$marker_end" ]; then
+              case "$chunk" in /*|[A-Za-z]:[\\/]*) last=$chunk ;; esac
+              in_block=0
+              continue
+            fi
+            [ "$in_block" -eq 1 ] || continue
+            case "$line" in ''|Path|---*) continue ;; esac
+            if [ -n "$chunk" ]; then
+              chunk="$chunk$line"
+            else
+              case "$line" in /*|[A-Za-z]:[\\/]*) chunk=$line ;; esac
+            fi
+          done <<EOF
 $out
 EOF
-        [ -z "$last" ] || break
+          [ -z "$last" ] || break 2
+          [ "$attempt" -ge $((attempts - 1)) ] || sleep "$delay"
+        done
       done
       case "$last" in
         [A-Za-z]:[\\/]*) cygpath -u "$last" 2>/dev/null || printf '%s\n' "$last" ;;

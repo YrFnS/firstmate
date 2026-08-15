@@ -620,6 +620,26 @@ fm_backend_bind_meta_context() {
   }
 }
 
+fm_backend_assert_recorded_herdr_endpoint_identity() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 target workspace tab binding
+  fm_backend_validate_task_endpoint "$meta" "$id" || return 2
+  [ "$FM_BACKEND_VALIDATED_BACKEND" = herdr ] || return 0
+  target=$FM_BACKEND_VALIDATED_TARGET
+  fm_backend_source herdr || return 2
+  fm_backend_herdr_parse_target "$target" || return 2
+  workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
+  tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
+  binding=$(fm_backend_herdr_task_binding_state \
+    "$FM_BACKEND_HERDR_SESSION" "$workspace" "$tab" \
+    "$FM_BACKEND_HERDR_PANE" "fm-$id")
+  case "$binding" in
+    dead|match) return 0 ;;
+    mismatch) echo "error: recorded Herdr workspace, tab, pane, and task label no longer match the live endpoint: $target" >&2 ;;
+    *) echo "error: recorded Herdr endpoint identity is unreadable: $target" >&2 ;;
+  esac
+  return 2
+}
+
 fm_backend_assert_recorded_endpoint_identity() {
   local meta=$1 target marker
   [ "$(fm_backend_of_meta "$meta")" = tmux ] || return 0
@@ -1055,8 +1075,9 @@ fm_backend_target_state() {  # <backend> <target> [zellij-tab-id] [expected-labe
 # Stop a task endpoint and prove it disappeared before any caller recycles or
 # removes the task's worktree. Kill adapters remain idempotent; this stricter
 # owner is for destructive cleanup paths that must not trust best-effort close.
-fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-label] [require-stable-tmux-id] [tmux-marker] [tmux-socket-path]
-  local backend=$1 target=$2 expected_label=${4:-} require_stable_tmux_id=${5:-0} tmux_marker=${6:-} tmux_socket=${7:-} attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status
+fm_backend_stop_and_verify() {  # <backend> <target> [tab-id] [expected-label] [require-stable-tmux-id] [tmux-marker] [tmux-socket-path] [herdr-workspace-id]
+  local backend=$1 target=$2 tab_id=${3:-} expected_label=${4:-} require_stable_tmux_id=${5:-0} tmux_marker=${6:-} tmux_socket=${7:-} herdr_workspace=${8:-}
+  local attempts=${FM_BACKEND_STOP_ATTEMPTS:-20} delay=${FM_BACKEND_STOP_DELAY:-0.1} i=0 state=unknown stop_target=$2 resolve_status binding
   local FM_BACKEND_TMUX_SOCKET=
   [ -n "$target" ] || { echo "error: missing backend endpoint id; refusing destructive cleanup" >&2; return 1; }
   case "$attempts" in ''|*[!0-9]*|0) attempts=20 ;; esac
@@ -1083,6 +1104,27 @@ fm_backend_stop_and_verify() {  # <backend> <target> [zellij-tab-id] [expected-l
       echo "error: backend endpoint $target could not be resolved to a stable tmux window; refusing destructive cleanup" >&2
       return 1
     }
+  elif [ "$backend" = herdr ]; then
+    fm_backend_source herdr || return 1
+    fm_backend_herdr_parse_target "$target" || {
+      echo "error: backend endpoint $target could not be parsed as an exact Herdr pane; refusing destructive cleanup" >&2
+      return 1
+    }
+    binding=$(fm_backend_herdr_task_binding_state \
+      "$FM_BACKEND_HERDR_SESSION" "$herdr_workspace" "$tab_id" \
+      "$FM_BACKEND_HERDR_PANE" "$expected_label")
+    case "$binding" in
+      dead) return 0 ;;
+      match) ;;
+      mismatch)
+        echo "error: Herdr endpoint $target no longer matches its recorded workspace, tab, and task label; refusing destructive cleanup" >&2
+        return 1
+        ;;
+      *)
+        echo "error: Herdr endpoint $target has unreadable task ownership; refusing destructive cleanup" >&2
+        return 1
+        ;;
+    esac
   fi
   if [ "$stop_target" = "$target" ]; then
     fm_backend_kill "$@" || return 1

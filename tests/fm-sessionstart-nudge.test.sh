@@ -171,6 +171,41 @@ EOF
   pass "OpenCode session.created delivers the exact wrapper nudge once per session"
 }
 
+test_target_workers_do_not_activate_primary_plugins() {
+  local out status=0
+  command -v node >/dev/null 2>&1 || {
+    echo "skip: node not found for target-worker plugin isolation test"
+    return 0
+  }
+  out=$(NODE_NO_WARNINGS=1 FM_TARGET_WORKTREE="$ROOT" FM_TEST_ROOT="$ROOT" node --input-type=module 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+
+const root = process.env.FM_TEST_ROOT;
+const registrations = [];
+const pi = { on: (...args) => registrations.push(["on", ...args]) };
+const turnend = await import(`${pathToFileURL(`${root}/.pi/extensions/fm-primary-turnend-guard.ts`).href}?worker=${Date.now()}`);
+turnend.default(pi);
+if (registrations.length !== 0) throw new Error(`Pi primary hooks activated: ${registrations.length}`);
+
+const plugins = [
+  ["fm-primary-sessionstart-nudge.js", "FmPrimarySessionstartNudge"],
+  ["fm-primary-watch-arm.js", "FmPrimaryWatchArm"],
+  ["fm-primary-turnend-guard.js", "FmPrimaryTurnendGuard"],
+  ["fm-primary-cd-check.js", "FmPrimaryCdCheck"],
+  ["fm-primary-pretool-check.js", "FmPrimaryPretoolCheck"],
+];
+for (const [file, name] of plugins) {
+  const mod = await import(`${pathToFileURL(`${root}/.opencode/plugins/${file}`).href}?worker=${Date.now()}-${file}`);
+  const hooks = await mod[name]({ client: {}, directory: root, worktree: root });
+  if (Object.keys(hooks).length !== 0) throw new Error(`${name} activated primary hooks`);
+}
+JS
+  ) || status=$?
+  expect_code 0 "$status" "target-worker plugin isolation"
+  [ -z "$out" ] || fail "target-worker plugin isolation printed output: $out"
+  pass "Pi turn-end and OpenCode workers targeting FirstMate do not activate primary supervision plugins"
+}
+
 # --- run tier ----------------------------------------------------------------
 #
 # make_run_primary builds a primary the run wrapper accepts and the REAL
@@ -542,6 +577,7 @@ test_linked_secondmate_primary_nudges
 test_missing_state_is_silent
 test_owned_lock_is_silent
 test_opencode_plugin_delivers_exact_nudge_once
+test_target_workers_do_not_activate_primary_plugins
 test_run_startup_runs_the_full_digest
 test_run_clear_and_compact_reemit
 test_run_rebuild_forwards_source_to_drifted_instruction_refresh

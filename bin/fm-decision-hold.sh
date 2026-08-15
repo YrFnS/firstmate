@@ -603,6 +603,7 @@ command_decline() {
   decision_file=$(parse_decision_only_flags "$@") || exit 2
   validate_slug origin-id "$origin"
   validate_slug decision-key "$key"
+  assert_origin_host "$origin" || exit $?
   load_decision "$decision_file"
   require_tasks_axi
   id=$(hold_id "$origin" "$key")
@@ -642,6 +643,7 @@ command_repair() {
   decision_file=$(parse_decision_only_flags "$@") || exit 2
   validate_slug origin-id "$origin"
   validate_slug decision-key "$key"
+  assert_origin_host "$origin" || exit $?
   load_decision "$decision_file"
   require_tasks_axi
   id=$(hold_id "$origin" "$key")

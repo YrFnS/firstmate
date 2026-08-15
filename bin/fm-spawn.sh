@@ -666,12 +666,21 @@ spawn_remote_secondmate() {
 BACKEND=
 HOST_MODE=0
 HOST_ROOT=
-if fm_host_root_enabled; then
+if [ "$RELAUNCH" -eq 0 ] && fm_host_root_enabled; then
   fm_host_root_assert_session_cwd "$FM_ROOT" || exit $?
   if [ "$KIND" != secondmate ]; then
     HOST_ROOT=$(fm_host_root_resolve "$FM_ROOT") || exit $?
     HOST_MODE=1
   fi
+elif [ "$RELAUNCH" -eq 1 ]; then
+  RELAUNCH_PREFLIGHT_ID=${POS[0]:-}
+  fm_task_id_creation_valid "$RELAUNCH_PREFLIGHT_ID" || { echo "error: invalid task id" >&2; exit 2; }
+  RELAUNCH_PREFLIGHT_META="$STATE/$RELAUNCH_PREFLIGHT_ID.meta"
+  if [ ! -f "$RELAUNCH_PREFLIGHT_META" ] || [ -L "$RELAUNCH_PREFLIGHT_META" ]; then
+    echo "error: --relaunch needs an existing regular task record; no $RELAUNCH_PREFLIGHT_META" >&2
+    exit 1
+  fi
+  fm_host_root_assert_task_cwd "$FM_ROOT" "$RELAUNCH_PREFLIGHT_META" || exit $?
 fi
 
 if [ "$HOST_MODE" -eq 1 ] && [ "$KIND" = ship ] && [ "$MODE" = local-only ]; then
@@ -715,6 +724,8 @@ SPAWN_META_TMP=
 SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
 SPAWN_META_PUBLISH_STARTED=0
+SECOND_MATE_RECOVERY_REPLACEMENT=0
+SECOND_MATE_RECOVERY_SNAPSHOT_DIR=
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 RELAUNCH_REPLACEMENT_PENDING=0
@@ -832,14 +843,24 @@ write_abort_meta() {
   } > "$STATE/$ID.meta" 2>/dev/null || true
 }
 
-remove_spawn_artifacts() {
-  [ -z "${auth_file:-}" ] || rm -f -- "$auth_file"
-  [ -z "${SPAWN_CREATE_OUT:-}" ] || rm -f -- "$SPAWN_CREATE_OUT"
-  if [ "$KIND" != secondmate ] && [ -n "${WT:-}" ] && [ -d "${WT:-}" ]; then
-    rm -f -- "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-      "$WT/.opencode/plugins/fm-busy-state.js" \
-      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  fi
+snapshot_second_mate_recovery_artifacts() {
+  local artifact
+  SECOND_MATE_RECOVERY_SNAPSHOT_DIR=$(umask 077; mktemp -d "$STATE/.$ID.secondmate-recovery.XXXXXX") || return 1
+  for artifact in "$STATE/$ID".*; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    cp -pP -- "$artifact" "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR/" || return 1
+  done
+  [ -f "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR/$ID.meta" ] || return 1
+  SECOND_MATE_RECOVERY_REPLACEMENT=1
+}
+
+discard_second_mate_recovery_snapshot() {
+  [ -z "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR" ] || rm -rf -- "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR"
+  SECOND_MATE_RECOVERY_SNAPSHOT_DIR=
+  SECOND_MATE_RECOVERY_REPLACEMENT=0
+}
+
+remove_spawn_state_artifacts() {
   rm -f -- "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
     "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token" \
     "$STATE/$ID.claude-settings.json" "$STATE/$ID.opencode-turn-end.js" \
@@ -849,6 +870,31 @@ remove_spawn_artifacts() {
     "$STATE/$ID.control-relaunch.note" \
     "$STATE/$ID.herdr-launch.sh" \
     "$STATE/$ID.busy" "$STATE/$ID.busy-state" "$STATE/$ID.busy-gen"
+}
+
+restore_second_mate_recovery_snapshot() {
+  local artifact
+  [ "$SECOND_MATE_RECOVERY_REPLACEMENT" = 1 ] || return 0
+  [ -d "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR" ] || return 1
+  remove_spawn_state_artifacts
+  for artifact in "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR"/"$ID".*; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    mv -f -- "$artifact" "$STATE/" || return 1
+  done
+  rmdir -- "$SECOND_MATE_RECOVERY_SNAPSHOT_DIR" || return 1
+  SECOND_MATE_RECOVERY_SNAPSHOT_DIR=
+  SECOND_MATE_RECOVERY_REPLACEMENT=0
+}
+
+remove_spawn_artifacts() {
+  [ -z "${auth_file:-}" ] || rm -f -- "$auth_file"
+  [ -z "${SPAWN_CREATE_OUT:-}" ] || rm -f -- "$SPAWN_CREATE_OUT"
+  if [ "$KIND" != secondmate ] && [ -n "${WT:-}" ] && [ -d "${WT:-}" ]; then
+    rm -f -- "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.opencode/plugins/fm-busy-state.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  remove_spawn_state_artifacts
   [ -z "${TASK_TMP:-}" ] || rm -rf -- "$TASK_TMP"
 }
 
@@ -881,6 +927,7 @@ spawn_abort_cleanup() {
   if [ "$ORCA_ABORT_CLEANUP" != 1 ] \
      && [ "$SPAWN_ABORT_CLEANUP" != 1 ] \
      && [ "$HERDR_PROJECTION_ABORT_CLEANUP" != 1 ]; then
+    discard_second_mate_recovery_snapshot
     spawn_herdr_presentation_order_lock_release
     if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
       SPAWN_TASK_LOCK_HELD=0
@@ -943,7 +990,7 @@ spawn_abort_cleanup() {
       # recycle a worktree while endpoint absence is unknown.
       cleanup_failed=1
       endpoint_stopped=0
-    elif [ -n "${T:-}" ] && ! fm_backend_stop_and_verify "$BACKEND" "$T" "${ZELLIJ_TAB_ID:-}" "${W:-fm-$ID}" "$HOST_MODE" "${TMUX_WINDOW_MARKER:-}" "${TMUX_SOCKET_PATH:-}"; then
+    elif [ -n "${T:-}" ] && ! fm_backend_stop_and_verify "$BACKEND" "$T" "${HERDR_TAB_ID:-${ZELLIJ_TAB_ID:-}}" "${W:-fm-$ID}" "$HOST_MODE" "${TMUX_WINDOW_MARKER:-}" "${TMUX_SOCKET_PATH:-}" "${HERDR_WORKSPACE_ID:-}"; then
       cleanup_failed=1
       endpoint_stopped=0
     fi
@@ -957,7 +1004,12 @@ spawn_abort_cleanup() {
   fi
   if [ "$cleanup_failed" -ne 0 ]; then
     write_abort_meta
+    discard_second_mate_recovery_snapshot
     echo "error: spawn cleanup was incomplete; recoverable task metadata remains at $STATE/$ID.meta" >&2
+  elif [ "$SECOND_MATE_RECOVERY_REPLACEMENT" = 1 ]; then
+    restore_second_mate_recovery_snapshot \
+      || echo "error: failed to restore prior secondmate artifacts; recovery snapshot remains at $SECOND_MATE_RECOVERY_SNAPSHOT_DIR" >&2
+    [ -z "${SPAWN_CREATE_OUT:-}" ] || rm -f -- "$SPAWN_CREATE_OUT"
   else
     remove_spawn_artifacts
   fi
@@ -1137,12 +1189,18 @@ if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
   if [ -f "$STATE/$ID.meta" ] && grep -q '^host_root=.' "$STATE/$ID.meta"; then
     RETAINED_HOST_MODE=1
   fi
-  if [ "${FM_SPAWN_SECOND_MATE_RECOVERY:-0}" = 1 ] \
+  if [ "$RELAUNCH" -eq 1 ]; then
+    : # Relaunch adopts and validates the retained record below.
+  elif [ "${FM_SPAWN_SECOND_MATE_RECOVERY:-0}" = 1 ] \
     && [ "$KIND" = secondmate ] \
     && [ -f "$STATE/$ID.meta" ] \
     && grep -qx 'kind=secondmate' "$STATE/$ID.meta" \
     && [ "$RETAINED_HOST_MODE" -eq 0 ]; then
-    : # The liveness sweep already proved this exact recorded secondmate recoverable.
+    if ! snapshot_second_mate_recovery_artifacts; then
+      discard_second_mate_recovery_snapshot
+      echo "error: could not snapshot retained secondmate artifacts for $ID" >&2
+      exit 1
+    fi
   elif [ "$HOST_MODE" -eq 1 ] || [ "$KIND" = secondmate ] || [ "$RETAINED_HOST_MODE" -eq 1 ]; then
     echo "error: task metadata already exists for $ID; reconcile or tear down the retained task before spawning" >&2
     exit 1
@@ -1168,11 +1226,27 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch needs an existing task record; no $RELAUNCH_META" >&2
     exit 1
   }
+  fm_host_root_assert_task_cwd "$FM_ROOT" "$RELAUNCH_META" || exit $?
   fm_backend_validate_task_endpoint "$RELAUNCH_META" "$ID" || exit 1
   BACKEND=$FM_BACKEND_VALIDATED_BACKEND
   RELAUNCH_TARGET=$FM_BACKEND_VALIDATED_TARGET
+  if HOST_ROOT=$(fm_host_root_recorded_owner "$RELAUNCH_META"); then
+    HOST_MODE=1
+  else
+    host_owner_status=$?
+    [ "$host_owner_status" -eq 1 ] || exit "$host_owner_status"
+    HOST_ROOT=
+    HOST_MODE=0
+  fi
+  if [ "$HOST_MODE" -eq 1 ] && [ "$BACKEND" = tmux ]; then
+    TMUX_WINDOW_MARKER=$(fm_meta_get "$RELAUNCH_META" tmux_window_marker)
+    TMUX_SOCKET_PATH=$(fm_meta_get "$RELAUNCH_META" tmux_socket_path)
+  fi
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
+  fm_backend_bind_meta_context "$RELAUNCH_META" || exit $?
+  fm_backend_assert_recorded_endpoint_identity "$RELAUNCH_META" || exit $?
+  [ "$BACKEND" != herdr ] || fm_backend_assert_recorded_herdr_endpoint_identity "$RELAUNCH_META" "$ID" || exit $?
   # A relaunch must PROVE the previous agent is gone before it launches another
   # one into the same endpoint, and only tmux and herdr have a recovery-grade
   # classifier that can (bin/fm-control-lib.sh owns that capability table).
@@ -1180,7 +1254,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: backend '$BACKEND' has no recovery-grade agent-state classifier, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
     exit 1
   }
-  RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
+  RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET" \
+    "$TMUX_WINDOW_MARKER" "$TMUX_SOCKET_PATH")
   [ "$RELAUNCH_STATE" = dead ] || {
     echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
     exit 1
@@ -2941,11 +3016,15 @@ META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
 SPAWN_META_PATH="$STATE/$ID.meta"
-if [ "$RELAUNCH" -eq 1 ]; then
+if [ "$RELAUNCH" -eq 1 ] || [ "$SECOND_MATE_RECOVERY_REPLACEMENT" = 1 ]; then
   SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
   fm_lock_acquire_wait "$SPAWN_META_LOCK"
   SPAWN_META_LOCK_HELD=1
-  SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
+  if [ "$RELAUNCH" -eq 1 ]; then
+    SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
+  else
+    SPAWN_META_TMP="$STATE/.$ID.meta.secondmate-replacement.${BASHPID:-$$}"
+  fi
   SPAWN_META_PATH=$SPAWN_META_TMP
 fi
 preserve_relaunch_meta() {
@@ -3009,7 +3088,7 @@ preserve_relaunch_meta() {
     echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
   fi
 } > "$SPAWN_META_PATH"
-if [ "$RELAUNCH" -eq 1 ]; then
+if [ "$RELAUNCH" -eq 1 ] || [ "$SECOND_MATE_RECOVERY_REPLACEMENT" = 1 ]; then
   SPAWN_META_PUBLISH_STARTED=1
   mv -f "$SPAWN_META_TMP" "$STATE/$ID.meta"
   RELAUNCH_REPLACEMENT_PENDING=0
@@ -3201,6 +3280,7 @@ fi
 # Keep the recorded endpoint and worktree instead of risking cleanup after execution began.
 ORCA_ABORT_CLEANUP=0
 SPAWN_ABORT_CLEANUP=0
+discard_second_mate_recovery_snapshot
 if ! spawn_send_key "$T" Enter; then
   echo "error: launch submission could not be confirmed; endpoint and task metadata were retained for recovery" >&2
   exit 1
