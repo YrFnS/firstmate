@@ -191,14 +191,14 @@ test_guard_warnings() {
 }
 
 test_lock_single_winner_under_concurrency() {
-  local dir state lockdir marker done i pids pid wins attempts
+  local dir state lockdir marker done_file i pids pid wins attempts
   dir=$(make_case lock-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
-  done="$dir/done"
+  done_file="$dir/done"
   : > "$marker"
-  : > "$done"
+  : > "$done_file"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
@@ -219,7 +219,7 @@ test_lock_single_winner_under_concurrency() {
           attempt=$((attempt + 1))
         done
       fi
-    ' _ "$LIB" "$lockdir" "$marker" "$done" &
+    ' _ "$LIB" "$lockdir" "$marker" "$done_file" &
     pids="$pids $!"
     i=$((i + 1))
   done
@@ -227,7 +227,7 @@ test_lock_single_winner_under_concurrency() {
     wait "$pid" 2>/dev/null || true
   done
   wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
-  attempts=$(awk 'NF { c++ } END { print c + 0 }' "$done")
+  attempts=$(awk 'NF { c++ } END { print c + 0 }' "$done_file")
   [ "$attempts" -eq 40 ] || fail "expected 40 completed lock attempts, got $attempts"
   [ "$wins" -eq 1 ] || fail "expected exactly one lock winner under concurrency, got $wins"
   pass "concurrent fm_lock_try_acquire yields exactly one winner"
@@ -289,17 +289,17 @@ SH
 }
 
 test_lock_stale_steal_single_winner_under_concurrency() {
-  local dir state lockdir dead marker done i pids pid wins attempts
+  local dir state lockdir dead marker done_file i pids pid wins attempts
   dir=$(make_case lock-stale-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
-  done="$dir/done"
+  done_file="$dir/done"
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
   : > "$marker"
-  : > "$done"
+  : > "$done_file"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
@@ -320,7 +320,7 @@ test_lock_stale_steal_single_winner_under_concurrency() {
           attempt=$((attempt + 1))
         done
       fi
-    ' _ "$LIB" "$lockdir" "$marker" "$done" &
+    ' _ "$LIB" "$lockdir" "$marker" "$done_file" &
     pids="$pids $!"
     i=$((i + 1))
   done
@@ -328,7 +328,7 @@ test_lock_stale_steal_single_winner_under_concurrency() {
     wait "$pid" 2>/dev/null || true
   done
   wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
-  attempts=$(awk 'NF { c++ } END { print c + 0 }' "$done")
+  attempts=$(awk 'NF { c++ } END { print c + 0 }' "$done_file")
   [ "$attempts" -eq 40 ] || fail "expected 40 completed stale-lock attempts, got $attempts"
   [ "$wins" -eq 1 ] || fail "expected exactly one stale-lock stealer, got $wins"
   pass "concurrent stale-lock steal yields exactly one winner"
