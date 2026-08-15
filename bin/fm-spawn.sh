@@ -3046,8 +3046,12 @@ if [ "$HARNESS" = codex ] && [ "$KIND" != secondmate ]; then
 fi
 sq_opencode_config=
 if [ "$HOST_MODE" -eq 1 ] && [ "$HARNESS" = opencode ]; then
+  opencode_plugin_path=$OPENCODE_TASK_PLUGIN
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*) opencode_plugin_path=$(cygpath -w "$opencode_plugin_path") ;;
+  esac
   opencode_plugin_url=$(node -e 'process.stdout.write(require("node:url").pathToFileURL(process.argv[1]).href)' \
-    "$OPENCODE_TASK_PLUGIN")
+    "$opencode_plugin_path")
   opencode_config=$(printf '{"permission":{"*":"allow"},"plugin":["%s"]}' \
     "$(json_escape "$opencode_plugin_url")")
   sq_opencode_config=$(shell_quote "$opencode_config")

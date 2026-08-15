@@ -34,6 +34,7 @@ command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found"; exit
 
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
+herdr_forget_inherited_pane
 export HERDR_SESSION="$SESSION"
 export FM_HERDR_LAB_STATE_DIR="$TMP_ROOT/lab-state"
 trap cleanup EXIT
@@ -47,6 +48,8 @@ make_repo() {
   "$@" "$dir"
   git -C "$dir" add .
   git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git clone -q --bare "$dir" "$dir.origin.git"
+  git -C "$dir" remote add origin "$dir.origin.git"
 }
 make_host() {
   printf 'host instructions\n' > "$1/AGENTS.md"

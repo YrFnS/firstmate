@@ -675,13 +675,37 @@ fm_backend_herdr_presentation_lock_namespace_uid() {
   fi
 }
 
+fm_backend_herdr_presentation_lock_namespace_is_noacl_usertemp() {
+  local dir=$1 temp_root
+  case "$(uname -s 2>/dev/null)" in
+    MSYS*|MINGW*|CYGWIN*) ;;
+    *) return 1 ;;
+  esac
+  temp_root=${TEMP:-/tmp}
+  case "$temp_root" in
+    [A-Za-z]:[\\/]*) temp_root=$(cygpath -u "$temp_root" 2>/dev/null) || return 1 ;;
+  esac
+  temp_root=$(cd "$temp_root" 2>/dev/null && pwd -P) || return 1
+  [ "$dir" = "$temp_root/firstmate-herdr-presentation" ] || return 1
+  mount | awk -v want="$temp_root" '
+    $2 == "on" && $3 == want && $4 == "type" &&
+      $0 ~ /[(,]noacl([,)]|$)/ &&
+      $0 ~ /[(,]usertemp([,)]|$)/ { found = 1 }
+    END { exit !found }
+  '
+}
+
 fm_backend_herdr_presentation_lock_namespace_valid() {
   local dir=$1 expected_uid owner mode
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   expected_uid=$(id -u 2>/dev/null) || return 1
   owner=$(fm_backend_herdr_presentation_lock_namespace_uid "$dir") || return 1
   mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$dir") || return 1
-  [ "$owner" = "$expected_uid" ] && [ "$mode" = 700 ]
+  [ "$owner" = "$expected_uid" ] || return 1
+  [ "$mode" = 700 ] || {
+    [ "$mode" = 755 ] \
+      && fm_backend_herdr_presentation_lock_namespace_is_noacl_usertemp "$dir"
+  }
 }
 
 # Resolve the one verified running named-session socket path as an absolute

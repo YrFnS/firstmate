@@ -17,6 +17,20 @@ make_host() {
   git -C "$path" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm instructions
 }
 
+make_project_with_origin() {
+  local path=$1
+  fm_git_init_commit "$path"
+  git clone -q --bare "$path" "$path.origin.git"
+  git -C "$path" remote add origin "$path.origin.git"
+}
+
+node_path() {
+  case $(uname -s) in
+    MINGW*|MSYS*|CYGWIN*) cygpath -w "$1" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 resolve_host() {
   FM_HOST_ROOT=$1 bash -c '. "$1"; fm_host_root_resolve "$2"' _ "$LIB" "$ROOT"
 }
@@ -239,7 +253,7 @@ test_brief_variants() {
 test_host_local_only_rejected_before_mutation() {
   local host="$TMP/local-only-host" home="$TMP/local-only-home" project="$TMP/local-only-physical" alias="$TMP/local-only-alias" fake_root="$TMP/local-only-root" guard_marker="$TMP/local-only-guard" out status=0
   make_host "$host"
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   ln -s "$project" "$alias"
   mkdir -p "$home/data" "$home/state" "$home/config" "$fake_root/bin"
   printf '%s\n%s\n' \
@@ -413,7 +427,7 @@ test_spawn_separates_roots() {
   local host="$TMP/spawn & host" home="$TMP/spawn home's \"quoted\" \\ & #%?" project="$TMP/target & repo" wt="$TMP/target & worktree" fb log current launch obs argv turnend meta marker marker_file socket out status=0 before after tree_line launch_line
   make_host "$host"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   git -C "$project" worktree add -q --detach "$wt"
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" lane "$(basename "$project")" --mode no-mistakes >/dev/null 2>&1)
   fb=$(make_fakebin "$TMP/fake")
@@ -480,7 +494,7 @@ PY
 test_duplicate_spawn_preserves_existing_task() {
   local host="$TMP/duplicate-host" home="$TMP/duplicate-home" project="$TMP/duplicate-target" fb log current launch out status=0
   make_host "$host"
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   mkdir -p "$home/data/lane" "$home/state" "$home/config"
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" \
     "$ROOT/bin/fm-brief.sh" lane target --mode no-mistakes >/dev/null 2>&1)
@@ -521,7 +535,7 @@ test_duplicate_spawn_preserves_existing_task() {
 
 test_unset_herdr_retry_reaches_existing_identity_checks() {
   local home="$TMP/unset-herdr-home" project="$TMP/unset-herdr-project" fb out status=0
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   mkdir -p "$home/data/herdr-retry" "$home/state" "$home/config"
   printf 'Retry existing Herdr task.\n' > "$home/data/herdr-retry/brief.md"
   : > "$home/config/herdr-presentation-spaces"
@@ -569,7 +583,7 @@ test_spawn_rejects_host_as_target() {
   local host="$TMP/refusal-host" home="$TMP/refusal-home" project="$TMP/refusal-target" fb log current tree_log out status=0
   make_host "$host"
   mkdir -p "$home/data/host-target" "$home/state" "$home/config"
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   (cd "$host" && FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-brief.sh" host-target target --mode no-mistakes >/dev/null 2>&1)
   fb=$(make_fakebin "$TMP/fake-refusals")
   log="$TMP/refusals.log"; current="$TMP/refusals.current"; tree_log="$TMP/treehouse.log"
@@ -609,7 +623,7 @@ test_orca_active_cwd_probe() {
 test_all_harnesses_add_one_task_safeguard() {
   local host="$TMP/adapters-host" home="$TMP/adapter home's #%?" project="$TMP/adapters-target" before after harness id wt fb log current launch text count out status=0
   make_host "$host"
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   mkdir -p "$home/data" "$home/state" "$home/config"
   mkdir -p "$TMP/harness-home/.kimi-code"
   printf 'default_model = "test"\n' > "$TMP/harness-home/.kimi-code/config.toml"
@@ -633,7 +647,7 @@ test_all_harnesses_add_one_task_safeguard() {
         count=$(printf '%s' "$text" | grep -o -- '--settings' | wc -l | tr -d ' ')
         [ "$count" -eq 1 ] || fail "Claude task settings appeared $count times"
         assert_present "$home/state/$id.claude-settings.json" "Claude task settings file missing"
-        node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$home/state/$id.claude-settings.json" \
+        node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$(node_path "$home/state/$id.claude-settings.json")" \
           || fail "Claude task settings are invalid JSON"
         ;;
       codex)
@@ -648,7 +662,7 @@ test_all_harnesses_add_one_task_safeguard() {
           MINGW*|MSYS*) assert_contains "$text" '%23%25%EF%80%BF' "OpenCode task plugin file URL did not encode MSYS path metacharacters" ;;
           *) assert_contains "$text" '%23%25%3F' "OpenCode task plugin file URL did not encode path metacharacters" ;;
         esac
-        node --check "$home/state/$id.opencode-turn-end.js" >/dev/null \
+        node --check "$(node_path "$home/state/$id.opencode-turn-end.js")" >/dev/null \
           || fail "OpenCode task plugin is invalid JavaScript"
         ;;
       pi)
@@ -819,7 +833,7 @@ test_secondmate_actions_keep_supervisor_host_authority() {
 
 test_spawn_rollback_is_transactional() {
   local host="$TMP/rollback-host" home="$TMP/rollback-home" project="$TMP/rollback-target" wt="$TMP/rollback-wt" stuck_wt="$TMP/rollback-stuck-wt" scout_wt="$TMP/rollback-scout-wt" uncertain_wt="$TMP/rollback-uncertain-wt" retained_wt="$TMP/rollback-retained-wt" unset_wt="$TMP/rollback-unset-wt" fb log current tree_log out status=0
-  make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; fm_git_init_commit "$project"
+  make_host "$host"; mkdir -p "$home/data" "$home/state" "$home/config"; make_project_with_origin "$project"
   git -C "$project" worktree add -q --detach "$wt"
   git -C "$project" worktree add -q --detach "$stuck_wt"
   git -C "$project" worktree add -q --detach "$scout_wt"
@@ -982,7 +996,7 @@ test_decision_actions_use_durable_host_owner() {
   cat > "$fb/tasks-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
-  "--version ") printf '%s\n' 'tasks-axi 0.2.2' ;;
+  "--version ") printf '%s\n' 'tasks-axi 0.2.4' ;;
   "update --help") printf '%s\n' '--archive-body' ;;
   "mv --help") printf '%s\n' '[<id>...]' ;;
   "hold --help") printf '%s\n' '--kind captain' ;;
@@ -1051,7 +1065,7 @@ printf 'window=test-session:fm-%s\nendpoint_task_id=%s\nworktree=/tmp/decision-t
 
 test_host_teardown_requires_confirmed_stop() {
   local host="$TMP/teardown-host" home="$TMP/teardown-home" project="$TMP/teardown-project" wt="$TMP/teardown-wt" fb log current tree_log out status=0 kill_line verify_line return_line
-  make_host "$host"; mkdir -p "$home/data/host-teardown" "$home/state" "$home/config"; fm_git_init_commit "$project"
+  make_host "$host"; mkdir -p "$home/data/host-teardown" "$home/state" "$home/config"; make_project_with_origin "$project"
   git -C "$project" worktree add -q --detach "$wt"
 printf 'window=test-session:fm-host-teardown\nendpoint_task_id=host-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=teardown-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
 "$wt" "$host" "$project" > "$home/state/host-teardown.meta"
@@ -1103,7 +1117,7 @@ printf 'window=test-session:fm-host-teardown\nendpoint_task_id=host-teardown\nwo
 test_host_teardown_refuses_recorded_overlap_before_mutation() {
   local host="$TMP/overlap-teardown-host" home="$TMP/overlap-teardown-home" project="$TMP/overlap-teardown-project" fb log current tree_log out status=0 branch
   make_host "$host"
-  fm_git_init_commit "$project"
+  make_project_with_origin "$project"
   mkdir -p "$home/state" "$home/config"
 printf 'window=test-session:fm-overlap-teardown\nendpoint_task_id=overlap-teardown\nworktree=%s\nhost_root=%s\nproject=%s\nkind=ship\nmode=local-only\ntmux_window_marker=overlap-marker\ntmux_socket_path=/tmp/fm-test.sock\n' \
 "$host" "$host" "$project" > "$home/state/overlap-teardown.meta"
@@ -1382,7 +1396,7 @@ test_task_actions_use_recorded_host_root() {
 
 test_spawn_rejects_old_brief_and_secondmate_clears_roots() {
   local host="$TMP/reject-host" home="$TMP/reject-home" project="$TMP/reject-target" subhome="$TMP/secondmate-home" unsethome="$TMP/secondmate-unset-home" aborthome="$TMP/secondmate-abort-home" fb log current launch meta out status=0
-  make_host "$host"; mkdir -p "$home/data/old" "$home/state" "$home/config"; printf 'old brief\n' > "$home/data/old/brief.md"; fm_git_init_commit "$project"
+  make_host "$host"; mkdir -p "$home/data/old" "$home/state" "$home/config"; printf 'old brief\n' > "$home/data/old/brief.md"; make_project_with_origin "$project"
   out=$(cd "$host" && FM_SPAWN_NO_GUARD=1 FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_HOST_ROOT="$host" "$ROOT/bin/fm-spawn.sh" old "$project" codex --mode no-mistakes --yolo off 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "host spawn accepted a cwd-relative old brief"
   assert_contains "$out" 'requires a host-root brief' "old-brief rejection was not explicit"
