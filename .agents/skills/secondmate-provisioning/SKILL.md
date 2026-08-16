@@ -86,6 +86,7 @@ Release happens only on explicit retirement or seed rollback, never on routine r
 `bin/fm-home-seed.sh` copies the charter into the secondmate home as `data/charter.md`.
 It also writes the gitignored `.fm-secondmate-parent` durable binding before the required `.fm-secondmate-home` identity marker; the parser header in [`bin/fm-secondmate-parent-lib.sh`](../../../bin/fm-secondmate-parent-lib.sh) owns the record contract, and both files must remain in place.
 `bin/fm-spawn.sh --secondmate` launches it through the secondmate harness path, resolving `config/secondmate-harness` -> `config/crew-harness` -> the primary's own harness unless an explicit per-spawn harness override is passed.
+Secondmates remain outside optional host-root mode: their launch prefix clears any inherited `FM_HOST_ROOT` and `FM_TARGET_WORKTREE`, their metadata has no `host_root=`, and their startup cwd remains the isolated FirstMate home.
 
 `config/secondmate-harness` may also pin a concrete model and effort for the secondmate agent, in the SAME file rather than a new one: the format is a single whitespace-separated line `<harness> [<model>] [<effort>]`, with only the first non-empty, non-comment line parsed.
 A bare `<harness>` (today's format, e.g. `claude`) behaves exactly as before - harness only, no model/effort flag - so this is fully backward-compatible.
@@ -198,21 +199,20 @@ It refuses a selected item with a single-space or tab-indented continuation rath
 It accepts in-scope `## Queued` entries only and refuses `## In flight` and historical `## Done` entries.
 Done records stay with their home for pruning or archiving.
 It is idempotent; an item already in the secondmate backlog is skipped.
+After a successful move it warns for any moved key that still owes a public relay reply bound to `main/<key>`, because that binding no longer names the home owning the work; rebind the commitment to `secondmate:<id>` through the `fmx-respond` promised-final procedure, which owns those commands.
+That same rule governs routing generally: a Relay-linked request whose work goes to a secondmate cannot use the home-local mention link at all and needs a promised-final commitment bound to that secondmate's home.
 It refuses any destination that is not a genuine seeded firstmate home with safe operational directories and a matching `.fm-secondmate-home` marker, so a move can never land in a project.
 Do not hand off `local-only` items.
 
 ## Recovery
 
-For local `kind=secondmate` meta with no window, treat the secondmate as a dead persistent direct report and respawn it with:
-
-```sh
-bin/fm-spawn.sh <id> --secondmate
-```
-
-Use the recorded `home=` in meta.
-If meta is missing but `data/secondmates.md` still registers the secondmate, respawn from the registry entry and its persistent home.
-For a remote route, the same command probes and relaunches only on the configured host.
-An SSH transport failure or unreadable remote endpoint remains unknown and must be reconciled on that host; never launch a local replacement.
+Retained `kind=secondmate` metadata remains recovery authority even when its window or endpoint field is missing.
+Do not delete or rewrite that metadata, and do not invoke a direct same-id `fm-spawn`; direct spawn refuses retained metadata so an ambiguous or incomplete cleanup cannot create a duplicate secondmate.
+The locked session-start liveness sweep owns relaunch after the recorded endpoint and verified harness produce a recovery-grade `dead` or `missing` result.
+For a remote route, that sweep probes and relaunches only on the configured host; an SSH transport failure or unreadable endpoint remains unknown and must never launch a local replacement.
+An absent endpoint field, ambiguous process, unreadable probe, or unverified harness is not relaunch authority; preserve the recorded `home=`, metadata, and endpoint evidence and report the exact blocker.
+`stuck-crewmate-recovery`'s remote-secondmate note owns why endpoint-dead and send-failed verdicts can be unreliable.
+If meta is missing but `data/secondmates.md` still registers the secondmate, respawn from the registry entry and its persistent on-disk home.
 Respawn re-resolves the secondmate harness from current config, uses the same guarded pre-launch sync, and re-propagates inherited local material, so recovered secondmates converge inherited config items and shared captain preferences whenever their home validates; tracked-file sync remains guarded separately.
 If the secondmate is already running and only inherited local material changed, prefer `bin/fm-config-push.sh` over respawning.
 To move a live LOCAL secondmate onto a newly pinned harness, model, or effort without a full recovery, set `config/secondmate-harness` and then relaunch it with `bin/fm-control.sh <id> relaunch`, which re-resolves that pin, stops the agent, and launches the replacement in the same home ([`docs/agent-control.md`](../../../docs/agent-control.md)).

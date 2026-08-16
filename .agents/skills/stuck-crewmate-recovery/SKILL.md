@@ -23,6 +23,9 @@ The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 This procedure covers ordinary `kind=ship` and `kind=scout` direct reports.
 Load `secondmate-provisioning` instead for `kind=secondmate` recovery.
 
+For a REMOTE secondmate, `fm-crew-state`'s `unknown`/`worktree gone` and `fm-send`'s `remote send failed`/`delivery unconfirmed` verdicts are unreliable and routinely false-negative; do not conclude the mate is dead or the send failed from those alone, confirm against the actual remote pane first.
+Recover a genuinely stuck remote mate only through `bin/fm-spawn.sh <id> --secondmate`, never raw herdr pane close/kill surgery, which strands the endpoint binding.
+
 Treat the digest's endpoint result as a presence signal, not proof that the task's work or validation run is gone.
 Read the targeted current state with `bin/fm-crew-state.sh <id>` before deciding to relaunch.
 A no-mistakes run matched to the crew's branch and current code remains authoritative when the endpoint is dead: handle a terminal or parked run through the normal lifecycle, and keep supervising an active run instead of creating a duplicate worker.
@@ -33,6 +36,7 @@ Do not sweep another home's endpoints or infer ownership from a matching window 
 
 Before relaunch, prove that no live agent still owns the recorded task and that the existing worktree remains available.
 Preserve its uncommitted changes and commits, keep the same task identity, and resume or relaunch the recorded harness in that existing worktree with the same brief plus a concise progress note.
+For a host-root task, relaunch the harness from the existing recorded worktree, pass it as `FM_TARGET_WORKTREE`, and retain the recorded physical `host_root=` only as the supervisor authority; [`docs/configuration.md`](../../../docs/configuration.md#host-root-mode-fm_host_root) owns that four-root contract.
 Do not use a fresh generic spawn while the recorded worktree is unaccounted for, because allocating another worktree can split one task across two copies.
 If the worktree or ownership cannot be reconciled safely, leave all state intact and report the task failed or blocked with the conflicting evidence.
 

@@ -155,6 +155,9 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 ## Worktrees, not branches in your checkout
 
+Every ordinary worker launches from its isolated task worktree.
+The optional host-root mode changes the primary supervisor's instruction root without changing that worker-cwd invariant; [configuration.md's four-root runtime contract](configuration.md#host-root-mode-fm_host_root) owns the details.
+
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
 `fm-spawn.sh` also owns the base-freshness boundary for every fresh ship and scout: no worker starts until its clean task worktree matches the fetched tip of origin's resolved default branch, and any unsafe or unverifiable base stops the spawn.
@@ -266,6 +269,7 @@ When a reply has a real visual artifact, `--image <path>` attaches one local PNG
 Actionable reversible requests run through firstmate's normal intake, backlog, dispatch, investigation, or ship lifecycle.
 Work that completes in the answering turn gets one outcome reply.
 Work that spawns a longer-running task gets an acknowledgement reply first; `bin/fm-x-link.sh` records `x_request=`, `x_request_ts=`, `x_followups=0`, and optional reply-platform context in that task's `state/<id>.meta`, while durable per-request context preserves the original platform and budget independently of task links and inbox cleanup.
+That link therefore reaches only work whose task record lives in the answering home; work routed to a secondmate is bound instead by a typed promised-final commitment registered with `--work-home secondmate:<id>`, and `bin/fm-x-link.sh` refuses a non-local task with that path named rather than leaving the public promise unbound.
 Later milestone wakes use `bin/fm-x-followup.sh` to post up to three public-safe follow-ups through the relay's `connector/followup` endpoint, ending with a `--final` one for ordinary Relay-linked work. A typed promised-final commitment owns its terminal reply through `bin/fm-public-followup.sh`; after its receipt is validated, `bin/fm-x-followup.sh --clear <task-id>` removes any legacy link without posting another reply.
 The [Relay configuration reference](configuration.md#relay-env) owns the exact context retention, platform-resolution, and fail-safe posting contract.
 If recovery relinks the same relay request onto a successor task, `fm-x-link.sh --carry-count <n> --carry-ts <epoch> --carry-platform <x|discord> --carry-max <n>` preserves the consumed follow-up count, original 7-day window, and reply split budget instead of granting a fresh local budget or falling back to the wrong platform.

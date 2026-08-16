@@ -1617,7 +1617,7 @@ JS
 }
 
 test_operational_followup_turn_e2e() {
-  local project home config sessions version label case_name calm_state expected_notifications session_file pane i captain_line handled_line geometry_gap exact_session
+  local project home config sessions version label case_name calm_state expected_notifications session_file pane pane_file i captain_line handled_line geometry_gap exact_session
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for Pi operational follow-up E2E"
     return 0
@@ -1789,7 +1789,7 @@ TS
       session_arg="--session '$session_arg'"
     fi
 
-    tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 160 -y 36 \
+    SHELL=/bin/bash tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 160 -y 36 \
       "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-context-files --no-skills --no-prompt-templates --no-extensions $extensions $session_arg; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 20"
     i=0
     while [ "$i" -lt 120 ]; do
@@ -1816,7 +1816,10 @@ TS
       fail "Pi follow-up $label case did not process the monitoring notification"
     fi
 
-    pane=$(tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" -S - 2>/dev/null || true)
+    pane_file="$TMP_ROOT/followup-$label.txt"
+    wait_for_text "$pane_file" "MONITOR_HANDLED_${label}_ONE" \
+      || fail "Pi follow-up $label case persisted but did not render the monitoring result"
+    pane=$(cat "$pane_file")
     [ "$(printf '%s\n' "$pane" | grep -Fc "CAPTAIN_ANSWER_$label" || true)" -eq 1 ] \
       || fail "Pi follow-up $label case rendered a duplicate captain answer"
     assert_contains "$pane" "CAPTAIN_PROMPT_$label" "Pi follow-up $label case hid the genuine captain prompt"
@@ -1917,7 +1920,7 @@ JS
   replay_exact_case() {
     tmux -L "$TMUX_SOCKET" kill-session -t "$TMUX_SESSION" 2>/dev/null || true
     printf '%s\n' on >"$home/config/calm"
-    tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 160 -y 36 \
+    SHELL=/bin/bash tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 160 -y 36 \
       "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-context-files --no-skills --no-prompt-templates --no-extensions -e ./.pi/extensions/fm-calm.ts -e ./followup-e2e.ts --session '$exact_session'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 20"
     i=0
     while [ "$i" -lt 120 ]; do
@@ -2075,7 +2078,7 @@ TS
   start_geometry_pi() {
     local session_arg=$1
     tmux -L "$TMUX_SOCKET" kill-session -t "$TMUX_SESSION" 2>/dev/null || true
-    tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 100 -y 44 \
+    SHELL=/bin/bash tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 100 -y 44 \
       "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' PI_OFFLINE=1 pi --approve --no-context-files --no-prompt-templates --no-extensions -e ./.pi/extensions/fm-calm.ts -e ./geometry-provider.ts $session_arg; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 20"
   }
 
@@ -3079,7 +3082,7 @@ JS
 }
 
 test_interactive_terminal_e2e() {
-  local project config home session_file export_file export_dom default_snapshot expanded_snapshot hidden_snapshot active_before_snapshot active_hidden_snapshot export_snapshot restored_snapshot working_snapshot working_response_snapshot restarted_snapshot resumed_restored_snapshot hash_before hash_after now version chrome chrome_pid chrome_wait active_wait active_screen_wait boat_frame_one boat_frame_two boat_resized_snapshot boat_focus_snapshot boat_cleared_snapshot boat_hull_line boat_sail_line boat_column_one boat_column_two boat_line boat_color_snapshot boat_color_line boat_water_snapshot boat_water_line boat_water_first boat_water_changed boat_narrow_snapshot boat_narrow_sails boat_freeze_snapshot boat_resume_snapshot boat_freeze_column boat_freeze_sail boat_resume_column boat_resume_sail
+  local project config home session_file export_file export_dom default_snapshot expanded_snapshot hidden_snapshot active_before_snapshot active_hidden_snapshot export_snapshot export_settled_snapshot restored_snapshot working_snapshot working_response_snapshot restarted_snapshot resumed_restored_snapshot hash_before hash_after now version chrome chrome_pid chrome_wait active_wait active_screen_wait boat_frame_one boat_frame_two boat_resized_snapshot boat_focus_snapshot boat_cleared_snapshot boat_hull_line boat_sail_line boat_column_one boat_column_two boat_line boat_color_snapshot boat_color_line boat_water_snapshot boat_water_line boat_water_first boat_water_changed boat_narrow_snapshot boat_narrow_sails boat_freeze_snapshot boat_resume_snapshot boat_freeze_column boat_freeze_sail boat_resume_column boat_resume_sail
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for Pi calm interactive E2E"
     return 0
@@ -3099,6 +3102,7 @@ test_interactive_terminal_e2e() {
   active_before_snapshot="$TMP_ROOT/active-before.txt"
   active_hidden_snapshot="$TMP_ROOT/active-hidden.txt"
   export_snapshot="$TMP_ROOT/export.txt"
+  export_settled_snapshot="$TMP_ROOT/export-settled.txt"
   restored_snapshot="$TMP_ROOT/restored.txt"
   working_snapshot="$TMP_ROOT/working.txt"
   working_response_snapshot="$TMP_ROOT/working-response.txt"
@@ -3318,7 +3322,7 @@ TS
 {"type":"message","id":"a0000016","parentId":"a0000015","timestamp":"$now","message":{"role":"assistant","content":[{"type":"text","text":"The deterministic tool example is complete."}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":2,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":16}}
 JSON
 
-  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
+  SHELL=/bin/bash tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
     "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-skills --no-prompt-templates --no-context-files --session '$session_file'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 30"
   wait_for_text "$default_snapshot" "The deterministic tool example is complete." \
     || fail "Pi calm E2E did not reach the restored session transcript"
@@ -3357,6 +3361,7 @@ JSON
     if ! grep -Fq "Thinking..." "$hidden_snapshot" &&
       ! grep -Fq "/calm" "$hidden_snapshot" &&
       ! grep -Fq "I will run one command." "$hidden_snapshot" &&
+      ! grep -Fq "fm_watch_arm_pi" "$hidden_snapshot" &&
       grep -Fq "FIRSTMATE WATCHER WAKE: can you explain this phrase?" "$hidden_snapshot" &&
       grep -Fq "The deterministic tool example is complete." "$hidden_snapshot"; then
       break
@@ -3506,6 +3511,7 @@ JS
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/export $export_file"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
   wait_for_text "$export_snapshot" "Session exported to: $export_file" \
+    || [ -s "$export_file" ] \
     || fail "/export did not complete while calm mode was on"
   node - "$export_file" <<'JS' || fail "calm-mode HTML export lost tool data or persisted synthetic provenance"
 const html = require("node:fs").readFileSync(process.argv[2], "utf8");
@@ -3556,6 +3562,38 @@ for (const current of ["CURRENT_WATCHER_E2E", "CURRENT_TURN_END_E2E", "CURRENT_A
 }
 if (!tree.includes("firstmate-synthetic-input") || !tree.includes("/tmp/probe.status")) process.exit(1);
 JS
+  # Calm returns the transcript to its own presentation once the export has been
+  # rendered. That repaint runs on the macrotask right after Pi prints the export
+  # confirmation, so it must not overwrite it: the captain has to keep seeing where
+  # their export landed. The export-data assertions above take seconds of real time,
+  # so this snapshot is taken well after that repaint has settled rather than racing it.
+  tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" -S -600 >"$export_settled_snapshot"
+  assert_contains "$(cat "$export_settled_snapshot")" "Session exported to: $export_file" \
+    "Calm's post-export repaint overwrote Pi's export confirmation"
+  assert_not_contains "$(cat "$export_settled_snapshot")" "fm_watch_arm_pi" \
+    "/export left the Firstmate watcher tool call shell in the Calm transcript"
+  assert_not_contains "$(cat "$export_settled_snapshot")" "watcher: started Pi extension arm child" \
+    "/export left the Firstmate watcher tool result in the Calm transcript"
+  assert_not_contains "$(cat "$export_settled_snapshot")" "FIRSTMATE WATCHER WAKE: signal: /tmp/probe.status" \
+    "/export left a synthetic Firstmate user-role presentation in the Calm transcript"
+  assert_not_contains "$(cat "$export_settled_snapshot")" "Thinking..." \
+    "/export left collapsed thinking labels in the Calm transcript"
+  assert_not_contains "$(cat "$export_settled_snapshot")" "I will run one command." \
+    "/export left a mid-turn assistant working note in the Calm transcript"
+  for hidden in \
+    CURRENT_WATCHER_E2E \
+    CURRENT_TURN_END_E2E \
+    CURRENT_AWAY_E2E \
+    CURRENT_FROM_FIRSTMATE_E2E \
+    CURRENT_LAUNCH_BRIEF_E2E
+  do
+    assert_not_contains "$(cat "$export_settled_snapshot")" "$hidden" \
+      "/export left operational input $hidden in the Calm transcript"
+  done
+  assert_contains "$(cat "$export_settled_snapshot")" "Show a deterministic tool example." \
+    "/export removed a genuine user prompt from the Calm transcript"
+  assert_contains "$(cat "$export_settled_snapshot")" "The deterministic tool example is complete." \
+    "/export removed genuine assistant conversation from the Calm transcript"
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/calm"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
@@ -3889,7 +3927,7 @@ JS
     || fail "Pi did not exit cleanly before the Calm persistence restart"
   tmux -L "$TMUX_SOCKET" kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 
-  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
+  SHELL=/bin/bash tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
     "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-skills --no-prompt-templates --no-context-files --session '$session_file'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 30"
   wait_for_text "$restarted_snapshot" "CALM_WORKING_E2E_RESPONSE" \
     || fail "Pi did not restore the persisted session after restart"
