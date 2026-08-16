@@ -1306,7 +1306,8 @@ set -u
 printf '%s\n' "\$*" >> "\${FM_FAKE_HERDR_LOG:?}"
 case "\${1:-} \${2:-}" in
   "session list") printf '%s\n' '{"sessions":[{"name":"child-session","running":true,"socket_path":"$case_root/child.sock"}]}' ;;
-  "workspace list") exit 1 ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t2","workspace_id":"w1","label":"fm-child"}}}' ;;
   "pane close") : > "\${FM_FAKE_HERDR_CLOSED:?}" ;;
   "pane get")
     if [ -e "\${FM_FAKE_HERDR_CLOSED:?}" ]; then

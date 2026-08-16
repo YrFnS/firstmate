@@ -237,6 +237,7 @@ The child receives exact `FM_HOST_ROOT` and `FM_TARGET_WORKTREE` values, while t
 For legacy task metadata without `host_root=`, an enabled host-root supervisor instead binds those actions to its validated physical `FM_HOST_ROOT` cwd.
 Review, merge, evidence, and teardown continue to use the recorded `worktree=` path.
 Teardown stops and verifies the recorded worker endpoint before changing or returning its isolated copy.
+Before deleting a host-root task's volatile metadata, teardown persists its recorded host owner with the task data so post-teardown decision actions remain bound to the same physical host.
 Every non-forced host-root ship teardown repeats worktree safety checks after the endpoint is confirmed stopped and before branch deletion or worktree return.
 Host-root briefs carry `<!-- firstmate-execution-mode: host-root -->`, require the worker to verify its target cwd and read applicable target instructions, and keep the unrelated host context out of the worker session.
 Spawn rejects a legacy brief without that marker rather than weakening the contract silently.
@@ -249,8 +250,8 @@ The host repository's lifecycle hooks remain limited to the supervisor session; 
 Host-root ordinary tasks reject raw launch commands because an unverified command cannot guarantee the required task completion safeguard.
 
 Secondmates are intentionally outside host-root mode.
-Creating a secondmate from a host-mode primary still requires the physical host cwd before brief or spawn mutation.
-A secondmate still launches from its isolated FirstMate home, receives neither `host_root=` metadata nor host-root brief semantics, and its launch explicitly clears inherited `FM_HOST_ROOT` and `FM_TARGET_WORKTREE`.
+Creating or relaunching a secondmate from a host-mode primary still requires the physical host cwd before brief or spawn mutation.
+A secondmate still launches and relaunches from its isolated FirstMate home, receives neither `host_root=` metadata nor host-root brief semantics, and every such launch explicitly clears inherited `FM_HOST_ROOT` and `FM_TARGET_WORKTREE`.
 A secondmate's own ordinary crews can opt in only through that home's own independently configured primary environment; the main home's roots never leak across the boundary.
 
 ## Harness support

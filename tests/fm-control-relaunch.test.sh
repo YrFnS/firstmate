@@ -619,9 +619,12 @@ test_turnend_auth_paths_are_owned_by_the_control_adapter() {
 }
 
 test_secondmate_relaunch_picks_up_the_configured_harness_pin() {
-  local dir home out rc
+  local dir home host out rc
   dir=$(new_case smpin sm3)
   home="$dir/home"
+  host="$dir/ambient-host"
+  mkdir -p "$host"
+  printf '# host\n' > "$host/AGENTS.md"
   mkdir -p "$home/config"
   printf 'codex some-model high\n' > "$home/config/secondmate-harness"
   mkdir -p "$home/data/sm3"
@@ -646,7 +649,7 @@ test_secondmate_relaunch_picks_up_the_configured_harness_pin() {
   printf '%s\n' "fm-sm3" > "$dir/fake/windows"
   printf '%s' "$dir/smhome" > "$dir/fake/cwd"
   printf 'codex' > "$dir/fake/becomes"
-  out=$(run_control "$dir" sm3 relaunch); rc=$?
+  out=$(cd "$host" && FM_HOST_ROOT="$host" FM_TARGET_WORKTREE=/ambient-target run_control "$dir" sm3 relaunch); rc=$?
   expect_code 0 "$rc" "a configured secondmate harness should relaunch"$'\n'"$out"
   [ "$(journal_field "$dir" sm3 to_harness)" = codex ] \
     || fail "a secondmate relaunch should pick up the configured harness pin, got '$(journal_field "$dir" sm3 to_harness)'"
@@ -654,8 +657,12 @@ test_secondmate_relaunch_picks_up_the_configured_harness_pin() {
     || fail "the configured model token should come with the pin"
   [ "$(journal_field "$dir" sm3 to_effort)" = high ] \
     || fail "the configured effort token should come with the pin"
+  ! grep -q '^host_root=' "$home/state/sm3.meta" \
+    || fail "a secondmate relaunch inherited ambient host ownership without a durable host_root"
+  assert_grep 'FM_HOST_ROOT= FM_TARGET_WORKTREE=' "$dir/fake/literal" \
+    "a secondmate relaunch did not clear the host primary's ambient roots"
   assert_not_contains "$out" "not a verified harness" "codex is a verified harness"
-  pass "fm-control relaunch: a secondmate relaunch re-resolves its durable configured harness pin"
+  pass "fm-control relaunch: durable metadata overrides ambient host mode while the configured harness pin is re-resolved"
 }
 
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop() {
@@ -1369,7 +1376,7 @@ test_spawn_relaunch_refuses_an_unrecorded_task() {
   add_ship_task "$dir" rl17 claude
   out=$(run_spawn "$dir" nosuchtask --relaunch); rc=$?
   expect_code 1 "$rc" "an unrecorded task should refuse"
-  assert_contains "$out" "needs an existing task record" "the refusal should name the missing record"
+  assert_contains "$out" "needs an existing regular task record" "the refusal should name the missing record"
   pass "fm-spawn --relaunch: an unrecorded task is refused"
 }
 
