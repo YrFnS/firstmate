@@ -35,7 +35,7 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi muse"
+VERIFIED_HARNESSES="claude codex opencode pi pi-signed grok kimi cursor muse"
 
 # The expectation table, written out independently of the implementation so a
 # silent change to either side shows up here. The fourth field is the composer
@@ -50,6 +50,7 @@ verified_adapter_contract() {  # <harness> -> exit command, interrupt key, repea
     pi-signed) printf '/quit\tEscape\t1\t\n' ;;
     grok) printf '/exit\tC-c\t1\t\n' ;;
     kimi) printf '/exit\tEscape\t1\t\n' ;;
+    cursor) printf '/exit\tEscape\t1\t\n' ;;
     muse) printf '/exit\tEscape\t1\tC-u\n' ;;
     *) return 1 ;;
   esac
@@ -78,10 +79,16 @@ make_tmux_stub() {  # <dir> -> echoes fakebin dir
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+socket=ambient
 if [ "${1:-}" = -S ]; then
-  [ -z "${FM_FAKE_SOCKET_LOG:-}" ] || printf '%s\n' "$2" >> "$FM_FAKE_SOCKET_LOG"
+  socket=$2
   shift 2
 fi
+if [ -n "${FM_FAKE_RECORDED_SOCKET:-}" ] \
+   && [ "$socket" != "$FM_FAKE_RECORDED_SOCKET" ]; then
+  D=$FM_FAKE_AMBIENT_DIR
+fi
+[ -z "${FM_FAKE_TMUX_SCOPE_LOG:-}" ] || printf '%s\t%s\n' "$socket" "$*" >> "$FM_FAKE_TMUX_SCOPE_LOG"
 case "${1:-}" in
   send-keys)
     shift
@@ -134,7 +141,13 @@ case "${1:-}" in
     if [ -f "$D/windows" ]; then cat "$D/windows"; fi
     exit 0 ;;
   list-panes)
-    if [ -f "$D/panes" ]; then cat "$D/panes"; fi
+    marker=$(cat "$D/marker" 2>/dev/null || true)
+    case "$*" in
+      *'#{pane_id}|#{window_id}'*)
+        printf '%%1|@1|fmses:fm-t1|fmses:fm-t1.0|fmses:1|fmses:1.0|%s\n' "$marker"
+        ;;
+      *) printf '@1|%s\n' "$marker" ;;
+    esac
     exit 0 ;;
 esac
 exit 0
@@ -203,6 +216,9 @@ run_control() {
     FM_FAKE_MUSE_LOG="${FM_FAKE_MUSE_LOG:-}" \
     FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK="${FM_FAKE_MUSE_DISAPPEAR_BEFORE_ACK:-}" \
     FM_FAKE_INTERRUPT_STOPS_AGENT="${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" \
+    FM_FAKE_RECORDED_SOCKET="${FM_FAKE_RECORDED_SOCKET:-}" \
+    FM_FAKE_AMBIENT_DIR="${FM_FAKE_AMBIENT_DIR:-}" \
+    FM_FAKE_TMUX_SCOPE_LOG="${FM_FAKE_TMUX_SCOPE_LOG:-}" \
     "$CONTROL" "$@" 2>&1
 }
 
@@ -227,7 +243,11 @@ test_exit_types_each_harness_verified_command() {
   for harness in $VERIFIED_HARNESSES; do
     dir=$(new_case "exit-$harness")
     add_task "$dir" t1 "$harness"
-    alive_as "$dir" "$harness"
+    if [ "$harness" = cursor ]; then
+      alive_as "$dir" cursor-agent
+    else
+      alive_as "$dir" "$harness"
+    fi
     out=$(run_control "$dir" t1 exit); rc=$?
     expect_code 0 "$rc" "exit on $harness should succeed"$'\n'"$out"
     IFS=$'\t' read -r expected key repeat clear <<< "$(verified_adapter_contract "$harness")"
@@ -243,7 +263,11 @@ test_interrupt_sends_each_harness_verified_key() {
   for harness in $VERIFIED_HARNESSES; do
     dir=$(new_case "int-$harness")
     add_task "$dir" t1 "$harness"
-    alive_as "$dir" "$harness"
+    if [ "$harness" = cursor ]; then
+      alive_as "$dir" cursor-agent
+    else
+      alive_as "$dir" "$harness"
+    fi
     out=$(run_control "$dir" t1 interrupt); rc=$?
     expect_code 0 "$rc" "interrupt on $harness should succeed"$'\n'"$out"
     IFS=$'\t' read -r expected key repeat clear <<< "$(verified_adapter_contract "$harness")"
@@ -263,8 +287,9 @@ test_interrupt_sends_each_harness_verified_key() {
 test_harness_family_resolution() {
   local pair recorded want got
   for pair in claude:claude claude-latest:claude codex:codex codex-cli:codex \
-      opencode:opencode grok:grok grok-2:grok kimi:kimi muse:muse \
-      muse-bin-0.1.0:muse pi:pi pi-signed:pi-signed; do
+      opencode:opencode grok:grok grok-2:grok kimi:kimi cursor:cursor \
+      cursor-agent:cursor muse:muse muse-bin-0.1.0:muse pi:pi \
+      pi-signed:pi-signed; do
     recorded=${pair%%:*}
     want=${pair#*:}
     got=$(fm_control_harness_family "$recorded") \
@@ -824,6 +849,43 @@ test_grok_idle_footer_does_not_confirm_cancellation() {
   pass "fm-control interrupt: grok's idle footer does not confirm cancellation"
 }
 
+test_host_root_control_uses_recorded_tmux_identity() {
+  local dir host ambient socket scope out rc line
+  dir=$(new_case host-root-control)
+  host="$dir/host"
+  ambient="$dir/ambient"
+  socket="$dir/recorded.sock"
+  scope="$dir/tmux-scope.log"
+  mkdir -p "$host" "$ambient"
+  printf '# Host instructions\n' > "$host/AGENTS.md"
+  add_task "$dir" t1 codex ship tmux @1
+  printf 'host_root=%s\ntmux_window_marker=owned-marker\ntmux_socket_path=%s\n' \
+    "$host" "$socket" >> "$dir/home/state/t1.meta"
+  printf 'owned-marker' > "$dir/fake/marker"
+  printf 'codex' > "$dir/fake/command"
+  : > "$scope"
+  : > "$ambient/literal"
+  : > "$ambient/keys"
+  printf 'codex' > "$ambient/command"
+  printf '%s' "$dir/wt-t1" > "$ambient/cwd"
+  printf 'foreign-marker' > "$ambient/marker"
+
+  out=$(cd "$host" && env -u FM_HOST_ROOT PATH="$dir/fakebin:$PATH" \
+    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    FM_FAKE_RECORDED_SOCKET="$socket" FM_FAKE_AMBIENT_DIR="$ambient" \
+    FM_FAKE_TMUX_SCOPE_LOG="$scope" FM_CONTROL_POLL=0.01 \
+    FM_CONTROL_SETTLE_WAIT=0.05 "$CONTROL" t1 interrupt 2>&1); rc=$?
+  expect_code 0 "$rc" "host-root interrupt should use the recorded tmux server"$'\n'"$out"
+  [ "$(cat "$dir/fake/keys")" = Escape ] \
+    || fail "the recorded endpoint did not receive the interrupt key"
+  [ ! -s "$ambient/keys" ] || fail "the ambient colliding endpoint received lifecycle input"
+  while IFS=$'\t' read -r line _; do
+    [ "$line" = "$socket" ] \
+      || fail "a host-root tmux read or write escaped to socket '$line'"
+  done < "$scope"
+  pass "fm-control: host-root lifecycle reads and writes stay on the recorded tmux socket and marker"
+}
+
 # --- 6. marker non-regression -----------------------------------------------
 
 test_secondmate_control_command_carries_no_marker() {
@@ -867,35 +929,6 @@ test_fm_send_still_marks_the_same_secondmate_task() {
   pass "fm-control's arrival leaves fm-send's from-firstmate marking untouched"
 }
 
-test_host_root_control_uses_recorded_tmux_identity() {
-  local dir host meta socket socket_log out rc
-  dir=$(new_case host-control)
-  host="$dir/host"
-  socket="$dir/task.sock"
-  socket_log="$dir/fake/socket-log"
-  mkdir -p "$host"
-  printf '# host\n' > "$host/AGENTS.md"
-  add_task "$dir" hostctl claude
-  meta="$dir/home/state/hostctl.meta"
-  printf 'host_root=%s\ntmux_window_marker=hostctl-marker\ntmux_socket_path=%s\n' "$host" "$socket" >> "$meta"
-  printf '%%1|@1|fmses:fm-hostctl|fmses:fm-hostctl.0|fmses:1|fmses:1.0|wrong-marker\n' > "$dir/fake/panes"
-  alive_as "$dir" claude
-  out=$(cd "$host" && env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
-    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_FAKE_SOCKET_LOG="$socket_log" \
-    "$CONTROL" hostctl interrupt 2>&1); rc=$?
-  expect_code 2 "$rc" "host-root control should refuse a colliding tmux identity"
-  [ ! -s "$dir/fake/keys" ] || fail "host-root control keyed a window whose marker did not match"
-
-  printf '%%1|@1|fmses:fm-hostctl|fmses:fm-hostctl.0|fmses:1|fmses:1.0|hostctl-marker\n' > "$dir/fake/panes"
-  out=$(cd "$host" && env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
-    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_FAKE_SOCKET_LOG="$socket_log" \
-    FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 "$CONTROL" hostctl exit 2>&1); rc=$?
-  expect_code 0 "$rc" "host-root control should act through the recorded tmux endpoint: $out"
-  assert_grep "$socket" "$socket_log" "host-root control did not select the recorded tmux socket"
-  [ "$(literals "$dir")" = /exit ] || fail "host-root control did not stop the recorded agent"
-  pass "fm-control: host-root lifecycle actions bind the recorded tmux identity"
-}
-
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_opencode_interrupts_twice_and_others_once
@@ -929,6 +962,6 @@ test_exit_accepts_agent_stopped_by_busy_interrupt
 test_agent_that_does_not_stop_fails_closed
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
+test_host_root_control_uses_recorded_tmux_identity
 test_secondmate_control_command_carries_no_marker
 test_fm_send_still_marks_the_same_secondmate_task
-test_host_root_control_uses_recorded_tmux_identity

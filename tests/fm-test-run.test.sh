@@ -101,6 +101,8 @@ init_changed_fixture_repo() {
     fm-backend-herdr-smoke.test.sh \
     fm-secondmate-safety.test.sh \
     fm-session-start.test.sh \
+    fm-sessionstart-nudge.test.sh \
+    fm-host-root-mode.test.sh \
     fm-afk-pi-herdr-return-e2e.test.sh \
     fm-backend.test.sh \
     fm-pr-merge.test.sh \
@@ -116,15 +118,26 @@ init_changed_fixture_repo() {
   : >"$repo/tests/lib.sh"
   : >"$repo/tests/fm-backend-herdr-eventwait.test.py"
   : >"$repo/bin/fm-supervisor-target-lib.sh"
+  : >"$repo/bin/fm-spawn.sh"
+  : >"$repo/bin/fm-host-root-lib.sh"
   : >"$repo/bin/unmapped-source.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
   printf '# .pi/extensions/fm-primary-pi-watch.ts\n' >>"$repo/tests/fm-pi-watch-extension.test.sh"
-  mkdir -p "$repo/.agents/skills/example" "$repo/.claude" "$repo/.pi/extensions" "$repo/src"
+  mkdir -p "$repo/.agents/skills/example" "$repo/.claude" "$repo/.pi/extensions" \
+    "$repo/.opencode/plugins" "$repo/src"
   : >"$repo/.agents/skills/example/SKILL.md"
   : >"$repo/.claude/settings.json"
   : >"$repo/.pi/extensions/fm-primary-pi-watch.ts"
   : >"$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+  for script in \
+    fm-primary-cd-check.js \
+    fm-primary-pretool-check.js \
+    fm-primary-sessionstart-nudge.js \
+    fm-primary-turnend-guard.js \
+    fm-primary-watch-arm.js; do
+    : >"$repo/.opencode/plugins/$script"
+  done
   : >"$repo/src/unmapped.ts"
   git -C "$repo" init -q
   git -C "$repo" add .
@@ -132,7 +145,7 @@ init_changed_fixture_repo() {
 }
 
 test_changed_dependency_selection_and_unmapped_failure() {
-  local tmp repo listed rc
+  local tmp repo listed rc script
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed.XXXXXX")
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
@@ -169,6 +182,25 @@ test_changed_dependency_selection_and_unmapped_failure() {
   assert_contains "$listed" "tests/fm-pi-watch-extension.test.sh" "Pi source selects watcher coverage"
   git -C "$repo" add .agents .claude .pi
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm non-bin-source-change
+
+  printf '\n' >>"$repo/bin/fm-spawn.sh"
+  printf '\n' >>"$repo/bin/fm-host-root-lib.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-secondmate-safety.test.sh" \
+    "spawn source selects SecondMate recovery coverage"
+  assert_contains "$listed" "tests/fm-host-root-mode.test.sh" \
+    "host-root authority source selects host-root behavior coverage"
+  git -C "$repo" add bin/fm-spawn.sh bin/fm-host-root-lib.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm lifecycle-source-change
+
+  for script in "$repo"/.opencode/plugins/fm-primary-*.js; do
+    printf '\n' >>"$script"
+    listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+    assert_contains "$listed" "tests/fm-sessionstart-nudge.test.sh" \
+      "$(basename "$script") selects shared target-worker activation coverage"
+    git -C "$repo" add "$script"
+    git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm "$(basename "$script")-change"
+  done
 
   printf '\n' >>"$repo/src/unmapped.ts"
   set +e
@@ -627,6 +659,40 @@ SH
   pass "jobs scheduler runs proven scripts; failure propagates; non-proven refused"
 }
 
+test_herdr_ci_family_run_has_a_step_timeout() {
+  # The required Herdr lane's hang tripwire is the family-run *step* bound, not
+  # the 75-minute job cap. Parse the workflow as YAML so nested `with.name`
+  # artifact keys cannot masquerade as the step contract.
+  command -v ruby >/dev/null 2>&1 \
+    || fail "ruby is required to parse .github/workflows/ci.yml as YAML"
+  local json job_timeout step_timeout
+  json=$(ruby -ryaml -rjson -e '
+doc = YAML.load_file(ARGV[0])
+job = doc.fetch("jobs").fetch("tests-herdr")
+step = job.fetch("steps").find { |s|
+  s.is_a?(Hash) && s["name"] == "Run real-Herdr family (serial, required)"
+}
+raise "missing family-run step" if step.nil?
+raise "family-run step has no timeout-minutes" unless step.key?("timeout-minutes")
+puts JSON.generate(
+  "job_timeout" => job.fetch("timeout-minutes"),
+  "step_timeout" => step.fetch("timeout-minutes")
+)
+' "$ROOT/.github/workflows/ci.yml") \
+    || fail "could not parse tests-herdr timeouts from ci.yml"
+  job_timeout=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_timeout"])' <<<"$json") \
+    || fail "could not read job timeout from parsed workflow"
+  step_timeout=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["step_timeout"])' <<<"$json") \
+    || fail "could not read step timeout from parsed workflow"
+  [ "$job_timeout" = 75 ] \
+    || fail "tests-herdr job backstop must stay 75 minutes, got $job_timeout"
+  [ "$step_timeout" = 20 ] \
+    || fail "family-run step timeout must be 20 minutes, got $step_timeout"
+  [ "$step_timeout" -lt "$job_timeout" ] \
+    || fail "family-run step timeout must be below the job backstop"
+  pass "Herdr CI family-run step times out at 20 min under a 75 min job backstop"
+}
+
 test_aggregate_json() {
   local tmp a b
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggjson.XXXXXX")
@@ -685,4 +751,5 @@ test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
+test_herdr_ci_family_run_has_a_step_timeout
 test_aggregate_json

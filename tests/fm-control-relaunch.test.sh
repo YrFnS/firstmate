@@ -56,10 +56,12 @@ make_tmux_stub() {  # <dir>
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+socket=ambient
 if [ "${1:-}" = -S ]; then
-  [ -z "${FM_FAKE_SOCKET_LOG:-}" ] || printf '%s\n' "$2" >> "$FM_FAKE_SOCKET_LOG"
+  socket=$2
   shift 2
 fi
+[ -z "${FM_FAKE_TMUX_SCOPE_LOG:-}" ] || printf '%s\t%s\n' "$socket" "$*" >> "$FM_FAKE_TMUX_SCOPE_LOG"
 case "${1:-}" in
   send-keys)
     shift
@@ -115,7 +117,15 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
-  list-panes) [ -f "$D/panes" ] && cat "$D/panes"; exit 0 ;;
+  list-panes)
+    marker=$(cat "$D/marker" 2>/dev/null || true)
+    case "$*" in
+      *'#{pane_id}|#{window_id}'*)
+        printf '%%1|@1|fmses:fm-rlhost|fmses:fm-rlhost.0|fmses:1|fmses:1.0|%s\n' "$marker"
+        ;;
+      *) printf '@1|%s\n' "$marker" ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 SH
@@ -183,6 +193,7 @@ run_spawn() {  # <case-dir> <args...>
   local dir=$1; shift
   env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
+    FM_FAKE_TMUX_SCOPE_LOG="${FM_FAKE_TMUX_SCOPE_LOG:-}" \
     "$SPAWN" "$@" 2>&1
 }
 
@@ -835,6 +846,19 @@ test_muse_session_binding_is_retired_on_a_harness_switch() {
   pass "fm-spawn --relaunch: switching away from muse retires its session binding"
 }
 
+test_cursor_session_binding_is_retired_on_a_harness_switch() {
+  local dir
+  dir=$(new_case cursorwiring rl35)
+  add_ship_task "$dir" rl35 cursor
+  printf 'workspace=%s\nprior_conversation=old-conversation\n' "$dir/wt" \
+    > "$dir/home/state/rl35.cursor-session"
+  printf 'zsh' > "$dir/fake/command"
+  run_spawn "$dir" rl35 --relaunch --harness claude >/dev/null
+  [ ! -e "$dir/home/state/rl35.cursor-session" ] \
+    || fail "the retired cursor incarnation's session binding must not outlive it"
+  pass "fm-spawn --relaunch: switching away from cursor retires its session binding"
+}
+
 # --- 3 and 4. refusals before the agent is touched ---------------------------
 
 test_missing_worktree_refuses_before_stopping_anything() {
@@ -1254,6 +1278,63 @@ test_promotion_participates_in_the_lifecycle_lock_before_metadata_resolution() {
 
 # --- 6. fm-spawn --relaunch's own refusals -----------------------------------
 
+test_spawn_relaunch_adopts_recorded_host_root_and_tmux_identity() {
+  local dir host socket scope out rc key value wrong fake_root before after
+  dir=$(new_case host-root-relaunch rlhost)
+  add_ship_task "$dir" rlhost claude
+  host="$dir/host"
+  socket="$dir/recorded.sock"
+  scope="$dir/tmux-scope.log"
+  mkdir -p "$host"
+  printf '# Host instructions\n' > "$host/AGENTS.md"
+  sed -i.bak 's/^window=.*/window=@1/' "$dir/home/state/rlhost.meta"
+  rm -f "$dir/home/state/rlhost.meta.bak"
+  printf 'host_root=%s\ntmux_window_marker=owned-marker\ntmux_socket_path=%s\n' \
+    "$host" "$socket" >> "$dir/home/state/rlhost.meta"
+  printf 'owned-marker' > "$dir/fake/marker"
+  printf 'zsh' > "$dir/fake/command"
+  printf '<!-- firstmate-execution-mode: host-root -->\n' >> "$dir/home/data/rlhost/brief.md"
+  : > "$scope"
+
+  wrong="$dir/wrong-host"
+  fake_root="$dir/guard-root"
+  mkdir -p "$wrong" "$fake_root/bin"
+  cat > "$fake_root/bin/fm-guard.sh" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_GUARD_MUTATION"
+SH
+  chmod +x "$fake_root/bin/fm-guard.sh"
+  before=$(cd "$dir/home" && { find . -mindepth 1 -print | sort; find . -type f -exec cksum {} \; | sort; })
+  out=$(cd "$wrong" && env -u FM_HOST_ROOT PATH="$dir/fakebin:$PATH" \
+    FM_ROOT_OVERRIDE="$fake_root" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    FM_GUARD_MUTATION="$dir/guard-ran" "$SPAWN" rlhost --relaunch --harness claude 2>&1); rc=$?
+  expect_code 2 "$rc" "wrong-cwd host-root relaunch should fail before mutation"
+  assert_contains "$out" 'requires the recorded host root cwd' \
+    "wrong-cwd relaunch did not identify its recorded host authority"
+  assert_absent "$dir/guard-ran" "wrong-cwd relaunch ran the supervision guard before host validation"
+  after=$(cd "$dir/home" && { find . -mindepth 1 -print | sort; find . -type f -exec cksum {} \; | sort; })
+  [ "$before" = "$after" ] || fail "wrong-cwd relaunch mutated the home before rejecting host authority"
+
+  out=$(cd "$host" && env -u FM_HOST_ROOT PATH="$dir/fakebin:$PATH" \
+    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_SPAWN_NO_GUARD=1 \
+    FM_FAKE_TMUX_SCOPE_LOG="$scope" GROK_HOME="$dir/grokhome" \
+    "$SPAWN" rlhost --relaunch --harness claude 2>&1); rc=$?
+  expect_code 0 "$rc" "direct host-root relaunch should adopt its retained record"$'\n'"$out"
+  assert_contains "$out" "spawned rlhost" "host-root relaunch did not launch the replacement"
+  for key in host_root tmux_window_marker tmux_socket_path; do
+    value=$(meta_field "$dir" rlhost "$key")
+    case "$key" in
+      host_root) [ "$value" = "$host" ] || fail "host-root relaunch changed its recorded owner" ;;
+      tmux_window_marker) [ "$value" = owned-marker ] || fail "host-root relaunch changed its tmux marker" ;;
+      tmux_socket_path) [ "$value" = "$socket" ] || fail "host-root relaunch changed its tmux socket" ;;
+    esac
+  done
+  while IFS=$'\t' read -r value _; do
+    [ "$value" = "$socket" ] || fail "host-root relaunch escaped to tmux socket '$value'"
+  done < "$scope"
+  pass "fm-spawn relaunch: retained host-root tasks reuse their recorded owner, endpoint, marker, and socket"
+}
+
 test_spawn_relaunch_refuses_a_live_agent() {
   local dir out rc
   dir=$(new_case live rl15)
@@ -1304,32 +1385,6 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding the work"
 }
 
-test_spawn_relaunch_restores_recorded_host_tmux_context() {
-  local dir host meta socket socket_log out rc
-  dir=$(new_case host-context rl30)
-  host="$dir/host"
-  socket="$dir/task.sock"
-  socket_log="$dir/fake/socket-log"
-  mkdir -p "$host"
-  printf '# host\n' > "$host/AGENTS.md"
-  add_ship_task "$dir" rl30 claude
-  printf '\nDelivery contract: mode=no-mistakes\n<!-- firstmate-execution-mode: host-root -->\n' >> "$dir/home/data/rl30/brief.md"
-  meta="$dir/home/state/rl30.meta"
-  printf 'host_root=%s\ntmux_window_marker=rl30-marker\ntmux_socket_path=%s\n' "$host" "$socket" >> "$meta"
-  printf '%%1|@1|fmses:fm-rl30|fmses:fm-rl30.0|fmses:1|fmses:1.0|rl30-marker\n' > "$dir/fake/panes"
-  printf 'zsh' > "$dir/fake/command"
-
-  out=$(cd "$host" && env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
-    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_FAKE_SOCKET_LOG="$socket_log" \
-    FM_SPAWN_NO_GUARD=1 "$SPAWN" rl30 --relaunch --harness claude 2>&1); rc=$?
-  expect_code 0 "$rc" "direct host-root relaunch should use its recorded endpoint context: $out"
-  assert_grep "$socket" "$socket_log" "direct host-root relaunch did not select the recorded tmux socket"
-  [ "$(grep -c '^host_root=' "$meta")" -eq 1 ] || fail "relaunch duplicated recorded host ownership"
-  [ "$(meta_field "$dir" rl30 tmux_window_marker)" = rl30-marker ] || fail "relaunch lost the recorded tmux marker"
-  [ "$(meta_field "$dir" rl30 tmux_socket_path)" = "$socket" ] || fail "relaunch lost the recorded tmux socket"
-  pass "fm-spawn --relaunch: recorded host and tmux identity govern replacement launch"
-}
-
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
@@ -1354,6 +1409,7 @@ test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
+test_cursor_session_binding_is_retired_on_a_harness_switch
 test_missing_worktree_refuses_before_stopping_anything
 test_missing_instructions_refuse_before_stopping_anything
 test_checkpoint_refusal_leaves_the_record_byte_identical
@@ -1371,8 +1427,8 @@ test_secondmate_checkpoint_refuses_unreadable_child_state
 test_concurrent_relaunch_is_refused
 test_direct_spawn_relaunch_participates_in_the_lifecycle_lock
 test_promotion_participates_in_the_lifecycle_lock_before_metadata_resolution
+test_spawn_relaunch_adopts_recorded_host_root_and_tmux_identity
 test_spawn_relaunch_refuses_a_live_agent
 test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
-test_spawn_relaunch_restores_recorded_host_tmux_context

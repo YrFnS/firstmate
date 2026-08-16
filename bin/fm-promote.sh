@@ -35,135 +35,95 @@ YOLO_SET=0
 POS=()
 want_value=
 for a in "$@"; do
-	if [ -n "$want_value" ]; then
-		case "$a" in
-		--*)
-			echo "error: --$want_value requires a value" >&2
-			exit 1
-			;;
-		esac
-		case "$want_value" in
-		mode)
-			MODE=$a
-			MODE_SET=1
-			;;
-		yolo)
-			YOLO=$a
-			YOLO_SET=1
-			;;
-		esac
-		want_value=
-		continue
-	fi
-	case "$a" in
-	--mode) want_value=mode ;;
-	--mode=*)
-		MODE=${a#--mode=}
-		MODE_SET=1
-		;;
-	--yolo) want_value=yolo ;;
-	--yolo=*)
-		YOLO=${a#--yolo=}
-		YOLO_SET=1
-		;;
-	*) POS+=("$a") ;;
-	esac
+  if [ -n "$want_value" ]; then
+    case "$a" in
+      --*) echo "error: --$want_value requires a value" >&2; exit 1 ;;
+    esac
+    case "$want_value" in
+      mode) MODE=$a; MODE_SET=1 ;;
+      yolo) YOLO=$a; YOLO_SET=1 ;;
+    esac
+    want_value=
+    continue
+  fi
+  case "$a" in
+    --mode) want_value=mode ;;
+    --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --yolo) want_value=yolo ;;
+    --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    *) POS+=("$a") ;;
+  esac
 done
-[ -z "$want_value" ] || {
-	echo "error: --$want_value requires a value" >&2
-	exit 1
-}
-[ "${#POS[@]}" -ge 1 ] || {
-	echo "usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>" >&2
-	exit 1
-}
+[ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
+[ "${#POS[@]}" -ge 1 ] || { echo "usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>" >&2; exit 1; }
 [ "$MODE_SET" -eq 1 ] || {
-	echo "error: promotion requires --mode <no-mistakes|direct-PR|local-only>; decide it now from the scout's findings and the project's registered posture in data/projects.md" >&2
-	exit 1
+  echo "error: promotion requires --mode <no-mistakes|direct-PR|local-only>; decide it now from the scout's findings and the project's registered posture in data/projects.md" >&2
+  exit 1
 }
 [ "$YOLO_SET" -eq 1 ] || {
-	echo "error: promotion requires --yolo <on|off>; it is this task's routine approval authority, not a project lookup" >&2
-	exit 1
+  echo "error: promotion requires --yolo <on|off>; it is this task's routine approval authority, not a project lookup" >&2
+  exit 1
 }
 case "$MODE" in
-no-mistakes | direct-PR | local-only) ;;
-no-mistakes-prod-only)
-	echo "error: no-mistakes-prod-only is a registry policy, not a task mode; classify this task's surface and resolve it to no-mistakes or direct-PR" >&2
-	exit 1
-	;;
-*)
-	echo "error: --mode must be one of no-mistakes, direct-PR, local-only (got '$MODE')" >&2
-	exit 1
-	;;
+  no-mistakes|direct-PR|local-only) ;;
+  no-mistakes-prod-only)
+    echo "error: no-mistakes-prod-only is a registry policy, not a task mode; classify this task's surface and resolve it to no-mistakes or direct-PR" >&2
+    exit 1 ;;
+  *) echo "error: --mode must be one of no-mistakes, direct-PR, local-only (got '$MODE')" >&2; exit 1 ;;
 esac
 case "$YOLO" in
-on | off) ;;
-*)
-	echo "error: --yolo must be on or off (got '$YOLO')" >&2
-	exit 1
-	;;
+  on|off) ;;
+  *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
 esac
 
 ID=${POS[0]}
-fm_task_id_creation_valid "$ID" || {
-	echo "error: invalid task id" >&2
-	exit 2
-}
+fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
 CONTROL_LOCK="$STATE/.control-$ID.lock"
 CONTROL_LOCK_HELD=0
 META_LOCK=
 META_LOCK_HELD=0
 TMP=
 promote_cleanup() {
-	local status=$?
-	[ -z "$TMP" ] || rm -f -- "$TMP" 2>/dev/null || true
-	if [ "$META_LOCK_HELD" = 1 ]; then
-		META_LOCK_HELD=0
-		fm_lock_release "$META_LOCK" || true
-	fi
-	if [ "$CONTROL_LOCK_HELD" = 1 ]; then
-		CONTROL_LOCK_HELD=0
-		fm_lock_release "$CONTROL_LOCK" || true
-	fi
-	return "$status"
+  local status=$?
+  [ -z "$TMP" ] || rm -f -- "$TMP" 2>/dev/null || true
+  if [ "$META_LOCK_HELD" = 1 ]; then
+    META_LOCK_HELD=0
+    fm_lock_release "$META_LOCK" || true
+  fi
+  if [ "$CONTROL_LOCK_HELD" = 1 ]; then
+    CONTROL_LOCK_HELD=0
+    fm_lock_release "$CONTROL_LOCK" || true
+  fi
+  return "$status"
 }
 trap promote_cleanup EXIT
 fm_lock_try_acquire "$CONTROL_LOCK" || {
-	echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
-	exit 1
+  echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
+  exit 1
 }
 CONTROL_LOCK_HELD=1
 META="$STATE/$ID.meta"
-[ -d "$STATE" ] || {
-	echo "error: state dir not found: $STATE" >&2
-	exit 1
-}
+[ -d "$STATE" ] || { echo "error: state dir not found: $STATE" >&2; exit 1; }
 META_LOCK=$(fm_meta_lock_path "$META") || exit 1
 fm_lock_acquire_wait "$META_LOCK"
 META_LOCK_HELD=1
-[ -f "$META" ] || {
-	echo "error: no meta for task $ID at $META" >&2
-	exit 1
-}
+[ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
 fm_host_root_assert_task_cwd "$FM_ROOT" "$META" || exit $?
 if grep -q '^host_root=.' "$META" && [ "$MODE" = local-only ]; then
-	echo "error: host-root mode does not support promoting local-only scout $ID" >&2
-	exit 1
+  echo "error: host-root mode does not support promoting local-only scout $ID" >&2
+  exit 1
 fi
 # The recorded host binding is established before this guard can repair state.
 "$FM_ROOT/bin/fm-guard.sh" || true
-grep -qx 'kind=scout' "$META" || {
-	echo "error: task $ID is not a scout task (kind=scout not in meta)" >&2
-	exit 1
-}
+grep -qx 'kind=scout' "$META" || { echo "error: task $ID is not a scout task (kind=scout not in meta)" >&2; exit 1; }
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" >"$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
 {
-	echo "kind=ship"
-	echo "mode=$MODE"
-	echo "yolo=$YOLO"
-} >>"$TMP"
+  echo "kind=ship"
+  echo "mode=$MODE"
+  echo "yolo=$YOLO"
+} >> "$TMP"
 mv "$TMP" "$META"
 TMP=
 fm_lock_release "$META_LOCK"
@@ -173,10 +133,10 @@ HOME_Q=$(printf '%q' "$FM_HOME")
 SEND=bin/fm-send.sh
 SHIP_INSTRUCTIONS="review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done"
 if grep -q '^host_root=.' "$META"; then
-	FM_ROOT_REAL=$(cd "$FM_ROOT" && pwd -P)
-	SEND=$(fm_host_root_shell_quote "$FM_ROOT_REAL/bin/fm-send.sh")
-	# shellcheck disable=SC2016  # These variables are literal worker instructions.
-	SHIP_INSTRUCTIONS='review scratch state with git -C "$FM_TARGET_WORKTREE" status and git -C "$FM_TARGET_WORKTREE" log; reset "$FM_TARGET_WORKTREE" to a clean default-branch base using git -C "$FM_TARGET_WORKTREE"; carry over only intended fix changes under "$FM_TARGET_WORKTREE"; create branch fm/'"$ID"' with git -C "$FM_TARGET_WORKTREE" checkout -b fm/'"$ID"'; implement under "$FM_TARGET_WORKTREE"; run every remaining Git command with git -C "$FM_TARGET_WORKTREE" and every test, build, and validation command through (cd "$FM_TARGET_WORKTREE" && ...); report done'
+  FM_ROOT_REAL=$(cd "$FM_ROOT" && pwd -P)
+  SEND=$(fm_host_root_shell_quote "$FM_ROOT_REAL/bin/fm-send.sh")
+  # shellcheck disable=SC2016  # These variables are literal worker instructions.
+  SHIP_INSTRUCTIONS='review scratch state with git -C "$FM_TARGET_WORKTREE" status and git -C "$FM_TARGET_WORKTREE" log; reset "$FM_TARGET_WORKTREE" to a clean default-branch base using git -C "$FM_TARGET_WORKTREE"; carry over only intended fix changes under "$FM_TARGET_WORKTREE"; create branch fm/'"$ID"' with git -C "$FM_TARGET_WORKTREE" checkout -b fm/'"$ID"'; implement under "$FM_TARGET_WORKTREE"; run every remaining Git command with git -C "$FM_TARGET_WORKTREE" and every test, build, and validation command through (cd "$FM_TARGET_WORKTREE" && ...); report done'
 fi
 echo "promoted $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)"
 echo "next: FM_HOME=$HOME_Q $SEND fm-$ID '<ship instructions for mode=$MODE: $SHIP_INSTRUCTIONS>'"

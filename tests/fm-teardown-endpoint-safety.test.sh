@@ -294,6 +294,60 @@ test_recorded_process_identity_cleanup_is_exact() {
   pass "process cleanup: creation-time PID identity removes only the exact child and preserves the control child"
 }
 
+test_herdr_reused_pane_refuses_before_close_or_return() {
+  local dir id=herdr-reused rc
+  dir=$(make_case herdr-reused)
+  cat > "$dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+printf 'herdr' >> "${FM_RUNTIME_LOG:?}"
+printf ' <%s>' "$@" >> "${FM_RUNTIME_LOG:?}"
+printf '\n' >> "${FM_RUNTIME_LOG:?}"
+case "${1:-} ${2:-}" in
+  'pane get')
+    count_file="${FM_RUNTIME_LOG}.pane-gets"
+    count=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+    printf '%s\n' "$count" > "$count_file"
+    if [ "$count" -lt 3 ]; then
+      printf '{"result":{"pane":{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"}}}\n'
+    else
+      printf '{"result":{"pane":{"pane_id":"w1:p2","tab_id":"w1:t-reused","workspace_id":"w1"}}}\n'
+    fi
+    ;;
+  'tab get')
+    printf '{"result":{"tab":{"tab_id":"w1:t2","workspace_id":"w1","label":"fm-herdr-reused"}}}\n'
+    ;;
+  'workspace list')
+    printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n'
+    ;;
+  'session list')
+    printf '{"sessions":[{"name":"lab","running":true,"socket_path":"/tmp/herdr-reused.sock"}]}\n'
+    ;;
+  *) printf '{"error":{"code":"unexpected_test_call"}}\n' ;;
+esac
+SH
+  chmod +x "$dir/fakebin/herdr"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" \
+    "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "reused Herdr pane teardown unexpectedly succeeded"
+  assert_present "$dir/home/state/$id.meta" "reused Herdr pane teardown removed task metadata"
+  assert_present "$dir/worktree/sentinel" "reused Herdr pane teardown returned the task worktree"
+  assert_not_contains "$(cat "$dir/runtime.log")" '<pane> <close>' \
+    "reused Herdr pane teardown closed an unrelated pane"
+  assert_not_contains "$(cat "$dir/runtime.log")" 'treehouse' \
+    "reused Herdr pane teardown returned the worktree"
+  assert_contains "$(cat "$dir/stderr")" 'no longer matches its recorded workspace, tab, and task label' \
+    "reused Herdr pane refusal did not identify the ownership mismatch"
+  pass "fm-teardown: post-preflight Herdr pane-ID reuse cannot close an unrelated pane or return the task worktree"
+}
+
 isolated_tmux_window_exists() {  # <dir> <socket> <session> <window>
   ( cd "$1" && "$REAL_TMUX" -S "$2" list-windows -t "$3" -F '#{window_name}' 2>/dev/null ) \
     | grep -Fqx "$4"
@@ -384,4 +438,5 @@ test_metadata_lock_serializes_destructive_cleanup
 test_supported_backend_endpoint_records_validate
 test_tmux_empty_target_refuses_without_invocation
 test_recorded_process_identity_cleanup_is_exact
+test_herdr_reused_pane_refuses_before_close_or_return
 test_isolated_tmux_invalid_and_valid_cleanup

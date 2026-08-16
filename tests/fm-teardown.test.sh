@@ -1412,9 +1412,11 @@ case "\${1:-} \${2:-}" in
   "session list") printf '%s\n' '{"sessions":[{"name":"default","running":true,"socket_path":"$case_dir/herdr.sock"}]}' ;;
   "status --json") printf '%s\n' '{"server":{"running":true}}' ;;
   "pane close") rm -f "\$state" ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wG","label":"firstmate"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"wG:tQ","workspace_id":"wG","label":"fm-task-x1"}}}' ;;
   "pane get")
     if [ -f "\$state" ]; then
-      printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ"}}}'
+      printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ","tab_id":"wG:tQ","workspace_id":"wG"}}}'
     else
       printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
       exit 1
@@ -1488,6 +1490,9 @@ case "\${1:-} \${2:-}" in
       exit 1
     fi
     printf '%s\n' '{"result":{"pane":{"pane_id":"wG:pQ","tab_id":"wG:tQ","workspace_id":"wG"}}}'
+    ;;
+  "tab get")
+    printf '%s\n' '{"result":{"tab":{"tab_id":"wG:tQ","workspace_id":"wG","label":"fm-task-x1"}}}'
     ;;
   "agent get")
     printf '%s\n' '{"error":{"code":"agent_not_found"}}' >&2
@@ -1693,7 +1698,8 @@ case "\${1:-} \${2:-}" in
       printf '%s\n' '{"sessions":[{"name":"childsession","running":true,"socket_path":"$case_dir/child.sock"}]}'
     fi
     ;;
-  "workspace list") exit 1 ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wC","label":"firstmate"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"wC:t1","workspace_id":"wC","label":"fm-child-herdr"}}}' ;;
   "pane get")
     if [ -e "\${FM_FAKE_HERDR_CLOSED:?}" ]; then
       if [ "\${FM_FAKE_HERDR_PRESENCE_UNKNOWN:-0}" = 1 ]; then
@@ -1893,7 +1899,8 @@ case "\${1:-} \${2:-}" in
   "session list")
     printf '%s\n' '{"sessions":[{"name":"grandchildsession","running":true,"socket_path":"$case_dir/grandchild.sock"}]}'
     ;;
-  "workspace list") exit 1 ;;
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wG","label":"firstmate"}]}}' ;;
+  "tab get") printf '%s\n' '{"result":{"tab":{"tab_id":"wG:t1","workspace_id":"wG","label":"fm-grandchild-herdr"}}}' ;;
   "pane get")
     if [ -e "\${FM_FAKE_HERDR_CLOSED:?}" ]; then
       printf '%s\n' 'not-json'
@@ -1993,12 +2000,13 @@ case "${1:-} ${2:-}" in
     printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1"}}}'
     ;;
   "tab get")
-    printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2"}}}'
+    case "${3:-}" in
+      w1:t2) printf '%s\n' '{"result":{"tab":{"tab_id":"w1:t2","workspace_id":"w1","label":"fm-task-x1"}}}' ;;
+      *) printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2"}}}' ;;
+    esac
     ;;
   "tab focus")
-    if [ "${FM_FAKE_HERDR_RESTORE_FAIL:-0}" = 1 ]; then
-      exit 1
-    fi
+    [ "${FM_FAKE_HERDR_RESTORE_FAIL:-0}" != 1 ] || exit 1
     : > "${FM_FAKE_HERDR_RESTORED:?}"
     printf '%s\n' '{"result":{"tab":{"tab_id":"w2:t2","workspace_id":"w2","focused":true}}}'
     ;;
@@ -2060,64 +2068,6 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
   assert_not_contains "$(cat "$log")" "workspace close" \
     "unconfirmed projected close must not escalate to workspace cleanup"
   pass "herdr projection teardown retains every record when post-close presence is unknown"
-}
-
-test_herdr_projection_teardown_retains_journal_when_close_fails() {
-  local case_dir log closed restored host status=0
-  case_dir=$(make_case herdr-projection-close-failed)
-  write_meta "$case_dir" local-only ship
-  host="$case_dir/host"
-  mkdir -p "$host"
-  : > "$host/AGENTS.md"
-  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
-  configure_herdr_projection_teardown_case "$case_dir"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
-
-  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
-    FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
-    || status=$?
-  [ "$status" -ne 0 ] || fail "herdr-projection-unconfirmed-close: teardown accepted an unconfirmed endpoint stop"
-  [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
-    || fail "unconfirmed task-pane close incorrectly retired the presentation journal"
-  assert_present "$case_dir/state/task-x1.meta" \
-    "unconfirmed projected close removed the recovery metadata"
-  assert_present "$case_dir/wt" \
-    "unconfirmed projected close removed the isolated worktree"
-  assert_grep "could not be confirmed absent" "$case_dir/stderr" \
-    "unconfirmed projected close did not explain the destructive-cleanup refusal"
-  assert_not_contains "$(cat "$log")" "workspace close" \
-    "unconfirmed projected close must not escalate to workspace cleanup"
-  pass "herdr projection teardown retains task state and refuses destructive cleanup when exact-pane close is unconfirmed"
-}
-
-test_herdr_projection_teardown_uses_focus_safe_close_without_token_correlation() {
-  local case_dir log closed restored host
-  case_dir=$(make_case herdr-projection-token-mismatch)
-  write_meta "$case_dir" local-only ship
-  host="$case_dir/host"
-  mkdir -p "$host"
-  : > "$host/AGENTS.md"
-  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
-  configure_herdr_projection_teardown_case "$case_dir"
-  sed -i.bak 's/^projection_id=.*/projection_id=ZyXwVuTsRqPoNmLkJiHgFe/' \
-    "$case_dir/state/task-x1.herdr-presentation"
-  rm -f "$case_dir/state/task-x1.herdr-presentation.bak"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
-
-  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
-    FM_FAKE_HERDR_RESTORED="$restored" \
-    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
-    || fail "herdr-projection-token-mismatch: focus-safe teardown failed"
-  assert_contains "$(cat "$log")" "pane close w1:p2" \
-    "token-mismatched journal bypassed the exact focus-safe pane close"
-  assert_contains "$(cat "$log")" "tab focus w2:t2" \
-    "token-mismatched journal did not restore the exact pre-close active tab"
-  assert_not_contains "$(cat "$log")" "workspace close" \
-    "token-mismatched journal attempted workspace cleanup"
-  assert_present "$case_dir/state/task-x1.herdr-presentation" \
-    "token-mismatched journal was retired without correlation"
-  pass "journal-backed Herdr teardown preserves focus even without token correlation"
 }
 
 test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup() {
@@ -2729,6 +2679,93 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+test_herdr_projection_teardown_retains_journal_when_close_fails() {
+  local case_dir log closed restored host status=0
+  case_dir=$(make_case herdr-projection-close-failed)
+  write_meta "$case_dir" local-only ship
+  host="$case_dir/host"
+  mkdir -p "$host"
+  : > "$host/AGENTS.md"
+  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
+  configure_herdr_projection_teardown_case "$case_dir"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+
+  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "herdr-projection-unconfirmed-close: teardown accepted an unconfirmed endpoint stop"
+  [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
+    || fail "unconfirmed task-pane close incorrectly retired the presentation journal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "unconfirmed projected close removed the recovery metadata"
+  assert_present "$case_dir/wt" \
+    "unconfirmed projected close removed the isolated worktree"
+  assert_grep "could not be confirmed absent" "$case_dir/stderr" \
+    "unconfirmed projected close did not explain the destructive-cleanup refusal"
+  assert_not_contains "$(cat "$log")" "workspace close" \
+    "unconfirmed projected close must not escalate to workspace cleanup"
+  pass "herdr projection teardown retains task state and refuses destructive cleanup when exact-pane close is unconfirmed"
+}
+
+test_herdr_projection_teardown_uses_focus_safe_close_without_token_correlation() {
+  local case_dir log closed restored host
+  case_dir=$(make_case herdr-projection-token-mismatch)
+  write_meta "$case_dir" local-only ship
+  host="$case_dir/host"
+  mkdir -p "$host"
+  : > "$host/AGENTS.md"
+  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
+  configure_herdr_projection_teardown_case "$case_dir"
+  sed -i.bak 's/^projection_id=.*/projection_id=ZyXwVuTsRqPoNmLkJiHgFe/' \
+    "$case_dir/state/task-x1.herdr-presentation"
+  rm -f "$case_dir/state/task-x1.herdr-presentation.bak"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+
+  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    FM_FAKE_HERDR_RESTORED="$restored" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
+    || fail "herdr-projection-token-mismatch: focus-safe teardown failed"
+  assert_contains "$(cat "$log")" "pane close w1:p2" \
+    "token-mismatched journal bypassed the exact focus-safe pane close"
+  assert_contains "$(cat "$log")" "tab focus w2:t2" \
+    "token-mismatched journal did not restore the exact pre-close active tab"
+  assert_not_contains "$(cat "$log")" "workspace close" \
+    "token-mismatched journal attempted workspace cleanup"
+  assert_present "$case_dir/state/task-x1.herdr-presentation" \
+    "token-mismatched journal was retired without correlation"
+  pass "journal-backed Herdr teardown preserves focus even without token correlation"
+}
+
+test_herdr_projection_teardown_retains_cleanup_when_focus_restore_fails() {
+  local case_dir log closed restored host status=0
+  case_dir=$(make_case herdr-projection-restore-failure)
+  write_meta "$case_dir" local-only ship
+  host="$case_dir/host"
+  mkdir -p "$host"
+  : > "$host/AGENTS.md"
+  printf 'host_root=%s\n' "$host" >> "$case_dir/state/task-x1.meta"
+  configure_herdr_projection_teardown_case "$case_dir"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+
+  (cd "$host" && FM_HOST_ROOT="$host" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_RESTORE_FAIL=1 \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr") \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "herdr-projection-restore-failure: teardown ignored failed focus restoration"
+  assert_present "$case_dir/state/task-x1.herdr-presentation" \
+    "failed focus restoration retired the presentation journal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "failed focus restoration removed recovery metadata"
+  assert_present "$case_dir/wt" \
+    "failed focus restoration removed the isolated worktree"
+  assert_grep 'exact-tab restoration failed' "$case_dir/stderr" \
+    "failed focus restoration did not explain the cleanup refusal"
+  assert_not_contains "$(cat "$log")" "workspace close" \
+    "failed focus restoration escalated to workspace cleanup"
+  pass "Herdr teardown retains cleanup records when focus restoration fails"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_removes_host_root_adapter_state
 test_teardown_prompts_tasks_axi_done_when_compatible
@@ -2750,9 +2787,10 @@ test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed
 test_forced_teardown_retains_nested_secondmate_home_when_grandchild_close_unconfirmed
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
+test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
 test_herdr_projection_teardown_retains_journal_when_close_fails
 test_herdr_projection_teardown_uses_focus_safe_close_without_token_correlation
-test_herdr_projection_teardown_surfaces_restore_failure_without_blocking_cleanup
+test_herdr_projection_teardown_retains_cleanup_when_focus_restore_fails
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows

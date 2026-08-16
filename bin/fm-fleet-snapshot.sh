@@ -512,7 +512,8 @@ task_json_lines() {
         fi
       fi
       if [ "$kind" = secondmate ] && [ -n "$target" ]; then
-        agent_alive=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null || printf unknown)
+        agent_alive=$( ( fm_backend_bind_meta_context "$meta" >/dev/null 2>&1 \
+          && fm_backend_agent_alive "$backend" "$target" 2>/dev/null ) || printf unknown)
       fi
     fi
 
