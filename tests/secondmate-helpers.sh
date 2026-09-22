@@ -25,39 +25,56 @@ make_fake_tmux() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
-stopped="${0}.stopped"
 case "${1:-}" in
-  has-session|new-session|send-keys)
+  has-session|new-session|new-window|kill-window)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
     exit 0
     ;;
-  new-window)
-    rm -f "$stopped"
+  send-keys)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
-    exit 0
-    ;;
-  kill-window)
-    : > "$stopped"
-    printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -l ]; then
+        case "$arg" in
+          ". '"*"'")
+            staged=${arg#". '"}
+            staged=${staged%"'"}
+            [ ! -f "$staged" ] || printf 'staged-launch %s\n' "$(cat "$staged")" >> "$FM_FAKE_TMUX_LOG"
+            ;;
+        esac
+      fi
+      prev=$arg
+    done
     exit 0
     ;;
   list-windows)
-    if [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
-      printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
-    fi
+    session=
+    prev=
+    for arg in "$@"; do
+      if [ "$prev" = -t ]; then session=$arg; break; fi
+      prev=$arg
+    done
+    while IFS= read -r recorded; do
+      [ -n "$recorded" ] || continue
+      if [ -z "$session" ]; then
+        printf '%s\n' "$recorded"
+        continue
+      fi
+      case "$recorded" in
+        "$session":*) printf '%s\n' "${recorded#*:}" ;;
+        *:*) ;;
+        *) printf '%s\n' "$recorded" ;;
+      esac
+    done <<EOF
+${FM_FAKE_TMUX_WINDOW:-}
+EOF
     exit 0
     ;;
   display-message)
-    [ ! -e "$stopped" ] || exit 1
     case "$*" in
       *'#{cursor_y}'*) printf '0\n' ;;
       *) printf 'firstmate\n' ;;
     esac
-    exit 0
-    ;;
-  list-panes)
-    [ -e "$stopped" ] && exit 0
-    printf '%%1\n'
     exit 0
     ;;
   capture-pane)
